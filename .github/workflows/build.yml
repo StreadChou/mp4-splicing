@@ -36,29 +36,11 @@ jobs:
       - name: Install frontend dependencies
         run: yarn install
 
-      - name: Download FFmpeg (macOS)
+      - name: Set execute permissions for FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
-          cd src-tauri/binaries
-          curl -L -o ffmpeg.7z https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z
-          curl -L -o ffprobe.7z https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z
-          7z x ffmpeg.7z
-          7z x ffprobe.7z
-          mv ffmpeg ffmpeg-aarch64-apple-darwin
-          mv ffprobe ffprobe-aarch64-apple-darwin
-          chmod +x ffmpeg-aarch64-apple-darwin ffprobe-aarch64-apple-darwin
-          rm -f *.7z
-
-      - name: Download FFmpeg (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          cd src-tauri/binaries
-          curl -L -o ffmpeg-windows.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-          7z x ffmpeg-windows.zip
-          move ffmpeg-*-essentials_build\bin\ffmpeg.exe ffmpeg-x86_64-pc-windows-msvc.exe
-          move ffmpeg-*-essentials_build\bin\ffprobe.exe ffprobe-x86_64-pc-windows-msvc.exe
-          rmdir /s /q ffmpeg-*-essentials_build
-          del ffmpeg-windows.zip
+          chmod +x src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+          chmod +x src-tauri/binaries/ffprobe-aarch64-apple-darwin
 
       - name: Build Tauri app
         run: yarn tauri build
