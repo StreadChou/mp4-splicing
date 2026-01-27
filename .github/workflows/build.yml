@@ -1,0 +1,99 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: yarn install
+
+      - name: Download FFmpeg (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          cd src-tauri/binaries
+          curl -L -o ffmpeg.7z https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z
+          curl -L -o ffprobe.7z https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z
+          7z x ffmpeg.7z
+          7z x ffprobe.7z
+          mv ffmpeg ffmpeg-aarch64-apple-darwin
+          mv ffprobe ffprobe-aarch64-apple-darwin
+          chmod +x ffmpeg-aarch64-apple-darwin ffprobe-aarch64-apple-darwin
+          rm -f *.7z
+
+      - name: Download FFmpeg (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          cd src-tauri/binaries
+          curl -L -o ffmpeg-windows.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+          7z x ffmpeg-windows.zip
+          move ffmpeg-*-essentials_build\bin\ffmpeg.exe ffmpeg-x86_64-pc-windows-msvc.exe
+          move ffmpeg-*-essentials_build\bin\ffprobe.exe ffprobe-x86_64-pc-windows-msvc.exe
+          rmdir /s /q ffmpeg-*-essentials_build
+          del ffmpeg-windows.zip
+
+      - name: Build Tauri app
+        run: yarn tauri build
+
+      - name: Create portable archive (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          cd src-tauri/target/release/bundle/macos
+          zip -r mp4handler-macos-portable.zip mp4handler.app
+
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            src-tauri/target/release/bundle/macos/mp4handler.app
+            src-tauri/target/release/bundle/macos/mp4handler-macos-portable.zip
+
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            src-tauri/target/release/bundle/macos/*.zip
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

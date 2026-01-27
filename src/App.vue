@@ -1,160 +1,395 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 
-const greetMsg = ref("");
-const name = ref("");
+const inputDir = ref("");
+const endingVideo = ref("");
+const randomCount = ref(3);
+const outputDir = ref("");
+const progressMsg = ref("");
+const errorMsg = ref("");
+const isProcessing = ref(false);
+const showCompatDialog = ref(false);
+const compatMessage = ref("");
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
+// 监听进度事件
+listen("progress", (event) => {
+  progressMsg.value = event.payload as string;
+});
+
+// 选择输入目录
+async function selectInputDir() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择输入目录",
+  });
+  if (selected) {
+    inputDir.value = selected as string;
+  }
+}
+
+// 选择结尾视频
+async function selectEndingVideo() {
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title: "选择结尾视频",
+    filters: [
+      {
+        name: "视频文件",
+        extensions: ["mp4"],
+      },
+    ],
+  });
+  if (selected) {
+    endingVideo.value = selected as string;
+  }
+}
+
+// 选择输出目录
+async function selectOutputDir() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择输出目录",
+  });
+  if (selected) {
+    outputDir.value = selected as string;
+  }
+}
+
+// 开始拼接
+async function startConcat() {
+  errorMsg.value = "";
+  progressMsg.value = "";
+
+  // 验证输入
+  if (!inputDir.value) {
+    errorMsg.value = "请选择输入目录";
+    return;
+  }
+  if (!outputDir.value) {
+    errorMsg.value = "请选择输出目录";
+    return;
+  }
+  if (randomCount.value <= 0) {
+    errorMsg.value = "随机数量必须大于 0";
+    return;
+  }
+
+  isProcessing.value = true;
+
+  try {
+    const result = await invoke<string>("concat_videos", {
+      inputDir: inputDir.value,
+      endingVideo: endingVideo.value || null,
+      randomCount: randomCount.value,
+      outputDir: outputDir.value,
+    });
+    progressMsg.value = result;
+  } catch (error) {
+    const errorStr = String(error);
+
+    // 检查是否是兼容性错误
+    if (errorStr.startsWith("INCOMPATIBLE_VIDEOS:")) {
+      compatMessage.value = errorStr.substring("INCOMPATIBLE_VIDEOS:".length);
+      showCompatDialog.value = true;
+    } else {
+      errorMsg.value = errorStr;
+    }
+  } finally {
+    isProcessing.value = false;
+  }
+}
+
+// 用户选择直接拼接
+async function concatDirect() {
+  showCompatDialog.value = false;
+  errorMsg.value = "正在尝试直接拼接...";
+  // 这里暂时不实现强制直接拼接，因为可能失败
+  errorMsg.value = "直接拼接可能失败，建议选择重新编码";
+}
+
+// 用户选择重新编码拼接
+async function concatWithReencode() {
+  showCompatDialog.value = false;
+  errorMsg.value = "";
+  progressMsg.value = "";
+  isProcessing.value = true;
+
+  try {
+    const result = await invoke<string>("concat_videos_with_reencode", {
+      inputDir: inputDir.value,
+      endingVideo: endingVideo.value || null,
+      randomCount: randomCount.value,
+      outputDir: outputDir.value,
+    });
+    progressMsg.value = result;
+  } catch (error) {
+    errorMsg.value = String(error);
+  } finally {
+    isProcessing.value = false;
+  }
+}
+
+// 取消对话框
+function cancelDialog() {
+  showCompatDialog.value = false;
 }
 </script>
 
 <template>
   <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
+    <h1>MP4 视频拼接工具</h1>
 
-    <div class="row">
-      <a href="https://vitejs.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+    <div class="form-group">
+      <label>输入目录 *</label>
+      <div class="input-row">
+        <input v-model="inputDir" placeholder="选择包含 MP4 文件的目录" readonly />
+        <button @click="selectInputDir" :disabled="isProcessing">选择</button>
+      </div>
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
 
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
+    <div class="form-group">
+      <label>结尾视频（可选）</label>
+      <div class="input-row">
+        <input v-model="endingVideo" placeholder="选择结尾视频文件" readonly />
+        <button @click="selectEndingVideo" :disabled="isProcessing">选择</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>随机视频数量 *</label>
+      <input v-model.number="randomCount" type="number" min="1" :disabled="isProcessing" />
+    </div>
+
+    <div class="form-group">
+      <label>输出目录 *</label>
+      <div class="input-row">
+        <input v-model="outputDir" placeholder="选择输出目录" readonly />
+        <button @click="selectOutputDir" :disabled="isProcessing">选择</button>
+      </div>
+    </div>
+
+    <button class="start-btn" @click="startConcat" :disabled="isProcessing">
+      {{ isProcessing ? "处理中..." : "开始拼接" }}
+    </button>
+
+    <div v-if="progressMsg" class="progress-box">
+      {{ progressMsg }}
+    </div>
+
+    <div v-if="errorMsg" class="error-box">
+      {{ errorMsg }}
+    </div>
+
+    <!-- 兼容性确认对话框 -->
+    <div v-if="showCompatDialog" class="dialog-overlay">
+      <div class="dialog">
+        <h2>视频格式不兼容</h2>
+        <p class="compat-message">{{ compatMessage }}</p>
+        <p>请选择处理方式：</p>
+        <div class="dialog-buttons">
+          <button @click="concatDirect" class="btn-warning">直接拼接（可能失败）</button>
+          <button @click="concatWithReencode" class="btn-primary">重新编码后拼接（较慢但保证成功）</button>
+          <button @click="cancelDialog" class="btn-secondary">取消</button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>
 
 <style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
 .container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
+  max-width: 550px;
+  margin: 0 auto;
+  padding: 20px;
 }
 
 h1 {
   text-align: center;
+  margin-bottom: 30px;
+  font-size: 24px;
 }
 
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+.form-group {
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
   font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
 }
 
-button {
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+input {
+  flex: 1;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  padding: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  background-color: #ffffff;
+}
+
+input[readonly] {
+  background-color: #f5f5f5;
   cursor: pointer;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+input[type="number"] {
+  width: 100%;
 }
 
-input,
 button {
-  outline: none;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #396cd8;
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.25s;
 }
 
-#greet-input {
-  margin-right: 5px;
+button:hover:not(:disabled) {
+  background-color: #2d5ab8;
+}
+
+button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.start-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 16px;
+  margin-top: 10px;
+}
+
+.progress-box {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #e7f3ff;
+  border: 1px solid #2196f3;
+  border-radius: 8px;
+  color: #0d47a1;
+  white-space: pre-wrap;
+}
+
+.error-box {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #ffebee;
+  border: 1px solid #f44336;
+  border-radius: 8px;
+  color: #c62828;
+  white-space: pre-wrap;
+}
+
+/* 对话框样式 */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  background-color: white;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.dialog h2 {
+  margin-top: 0;
+  margin-bottom: 16px;
+  font-size: 20px;
+  color: #f44336;
+}
+
+.compat-message {
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  color: #856404;
+}
+
+.dialog-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.btn-primary {
+  background-color: #4caf50;
+}
+
+.btn-primary:hover {
+  background-color: #45a049;
+}
+
+.btn-warning {
+  background-color: #ff9800;
+}
+
+.btn-warning:hover {
+  background-color: #e68900;
+}
+
+.btn-secondary {
+  background-color: #9e9e9e;
+}
+
+.btn-secondary:hover {
+  background-color: #757575;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
+  input {
     color: #ffffff;
-    background-color: #0f0f0f98;
+    background-color: #2f2f2f;
+    border-color: #555;
   }
-  button:active {
-    background-color: #0f0f0f69;
+
+  input[readonly] {
+    background-color: #1f1f1f;
+  }
+
+  .dialog {
+    background-color: #2f2f2f;
+    color: #f6f6f6;
+  }
+
+  .compat-message {
+    background-color: #3e3420;
+    border-color: #8b7000;
+    color: #ffd54f;
   }
 }
-
 </style>
