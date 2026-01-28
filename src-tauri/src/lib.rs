@@ -1,4 +1,5 @@
 mod video_processor;
+mod video_splitter;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -15,7 +16,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             video_processor::concat_videos,
-            video_processor::concat_videos_with_reencode
+            video_processor::concat_videos_with_reencode,
+            video_splitter::split_videos
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

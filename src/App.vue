@@ -4,6 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 
+// Tab 状态
+const activeTab = ref<'concat' | 'split'>('concat');
+
+// 拼接功能状态
 const inputDir = ref("");
 const endingVideo = ref("");
 const randomCount = ref(3);
@@ -14,9 +18,42 @@ const isProcessing = ref(false);
 const showCompatDialog = ref(false);
 const compatMessage = ref("");
 
-// 监听进度事件
+// 拆解功能状态
+const splitInputDir = ref("");
+const splitOutputDir = ref("");
+const similarityThreshold = ref(50);
+const sceneDetectWindow = ref(10);
+const splitProgress = ref("");
+const splitError = ref("");
+const isSplitting = ref(false);
+const splitProgressPercent = ref(0);
+const splitCurrentVideo = ref("");
+const splitSegmentCount = ref(0);
+
+// 监听拼接进度事件
 listen("progress", (event) => {
   progressMsg.value = event.payload as string;
+});
+
+// 监听拆解进度事件
+listen("split_progress", (event) => {
+  const payload = event.payload as {
+    type: 'scanning' | 'processing' | 'extracting' | 'complete'
+    message: string
+    percent?: number
+    videoName?: string
+    segmentCount?: number
+  }
+  splitProgress.value = payload.message;
+  if (payload.percent !== undefined) {
+    splitProgressPercent.value = payload.percent;
+  }
+  if (payload.videoName) {
+    splitCurrentVideo.value = payload.videoName;
+  }
+  if (payload.segmentCount !== undefined) {
+    splitSegmentCount.value = payload.segmentCount;
+  }
 });
 
 // 选择输入目录
@@ -58,6 +95,30 @@ async function selectOutputDir() {
   });
   if (selected) {
     outputDir.value = selected as string;
+  }
+}
+
+// 选择拆解输入目录
+async function selectSplitInputDir() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择输入目录",
+  });
+  if (selected) {
+    splitInputDir.value = selected as string;
+  }
+}
+
+// 选择拆解输出目录
+async function selectSplitOutputDir() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择输出目录",
+  });
+  if (selected) {
+    splitOutputDir.value = selected as string;
   }
 }
 
@@ -139,64 +200,190 @@ async function concatWithReencode() {
 function cancelDialog() {
   showCompatDialog.value = false;
 }
+
+// 开始拆解
+async function startSplit() {
+  splitError.value = "";
+  splitProgress.value = "";
+  splitProgressPercent.value = 0;
+
+  // 验证输入
+  if (!splitInputDir.value) {
+    splitError.value = "请选择输入目录";
+    return;
+  }
+  if (!splitOutputDir.value) {
+    splitError.value = "请选择输出目录";
+    return;
+  }
+  if (similarityThreshold.value < 0 || similarityThreshold.value > 100) {
+    splitError.value = "相似度阈值必须在 0-100 之间";
+    return;
+  }
+  if (sceneDetectWindow.value < 1 || sceneDetectWindow.value > 60) {
+    splitError.value = "转场检测窗口必须在 1-60 秒之间";
+    return;
+  }
+
+  isSplitting.value = true;
+
+  try {
+    const result = await invoke<string>("split_videos", {
+      inputDir: splitInputDir.value,
+      outputDir: splitOutputDir.value,
+      similarityThreshold: similarityThreshold.value,
+      sceneDetectWindow: sceneDetectWindow.value,
+    });
+    splitProgress.value = result;
+  } catch (error) {
+    splitError.value = String(error);
+  } finally {
+    isSplitting.value = false;
+  }
+}
 </script>
 
 <template>
   <main class="container">
-    <h1>MP4 视频拼接工具</h1>
+    <h1>MP4 视频处理工具</h1>
 
-    <div class="form-group">
-      <label>输入目录 *</label>
-      <div class="input-row">
-        <input v-model="inputDir" placeholder="选择包含 MP4 文件的目录" readonly />
-        <button @click="selectInputDir" :disabled="isProcessing">选择</button>
-      </div>
+    <!-- Tab 导航栏 -->
+    <div class="tab-nav">
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'concat' }"
+        @click="activeTab = 'concat'"
+      >
+        视频拼接
+      </button>
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'split' }"
+        @click="activeTab = 'split'"
+      >
+        视频拆解
+      </button>
     </div>
 
-    <div class="form-group">
-      <label>结尾视频（可选）</label>
-      <div class="input-row">
-        <input v-model="endingVideo" placeholder="选择结尾视频文件" readonly />
-        <button @click="selectEndingVideo" :disabled="isProcessing">选择</button>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label>随机视频数量 *</label>
-      <input v-model.number="randomCount" type="number" min="1" :disabled="isProcessing" />
-    </div>
-
-    <div class="form-group">
-      <label>输出目录 *</label>
-      <div class="input-row">
-        <input v-model="outputDir" placeholder="选择输出目录" readonly />
-        <button @click="selectOutputDir" :disabled="isProcessing">选择</button>
-      </div>
-    </div>
-
-    <button class="start-btn" @click="startConcat" :disabled="isProcessing">
-      {{ isProcessing ? "处理中..." : "开始拼接" }}
-    </button>
-
-    <div v-if="progressMsg" class="progress-box">
-      {{ progressMsg }}
-    </div>
-
-    <div v-if="errorMsg" class="error-box">
-      {{ errorMsg }}
-    </div>
-
-    <!-- 兼容性确认对话框 -->
-    <div v-if="showCompatDialog" class="dialog-overlay">
-      <div class="dialog">
-        <h2>视频格式不兼容</h2>
-        <p class="compat-message">{{ compatMessage }}</p>
-        <p>请选择处理方式：</p>
-        <div class="dialog-buttons">
-          <button @click="concatDirect" class="btn-warning">直接拼接（可能失败）</button>
-          <button @click="concatWithReencode" class="btn-primary">重新编码后拼接（较慢但保证成功）</button>
-          <button @click="cancelDialog" class="btn-secondary">取消</button>
+    <!-- 拼接功能区域 -->
+    <div v-show="activeTab === 'concat'" class="tab-content">
+      <div class="form-group">
+        <label>输入目录 *</label>
+        <div class="input-row">
+          <input v-model="inputDir" placeholder="选择包含 MP4 文件的目录" readonly />
+          <button @click="selectInputDir" :disabled="isProcessing">选择</button>
         </div>
+      </div>
+
+      <div class="form-group">
+        <label>结尾视频（可选）</label>
+        <div class="input-row">
+          <input v-model="endingVideo" placeholder="选择结尾视频文件" readonly />
+          <button @click="selectEndingVideo" :disabled="isProcessing">选择</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>随机视频数量 *</label>
+        <input v-model.number="randomCount" type="number" min="1" :disabled="isProcessing" />
+      </div>
+
+      <div class="form-group">
+        <label>输出目录 *</label>
+        <div class="input-row">
+          <input v-model="outputDir" placeholder="选择输出目录" readonly />
+          <button @click="selectOutputDir" :disabled="isProcessing">选择</button>
+        </div>
+      </div>
+
+      <button class="start-btn" @click="startConcat" :disabled="isProcessing">
+        {{ isProcessing ? "处理中..." : "开始拼接" }}
+      </button>
+
+      <div v-if="progressMsg" class="progress-box">
+        {{ progressMsg }}
+      </div>
+
+      <div v-if="errorMsg" class="error-box">
+        {{ errorMsg }}
+      </div>
+
+      <!-- 兼容性确认对话框 -->
+      <div v-if="showCompatDialog" class="dialog-overlay">
+        <div class="dialog">
+          <h2>视频格式不兼容</h2>
+          <p class="compat-message">{{ compatMessage }}</p>
+          <p>请选择处理方式：</p>
+          <div class="dialog-buttons">
+            <button @click="concatDirect" class="btn-warning">直接拼接（可能失败）</button>
+            <button @click="concatWithReencode" class="btn-primary">重新编码后拼接（较慢但保证成功）</button>
+            <button @click="cancelDialog" class="btn-secondary">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 拆解功能区域 -->
+    <div v-show="activeTab === 'split'" class="tab-content">
+      <div class="form-group">
+        <label>输入目录 *</label>
+        <div class="input-row">
+          <input v-model="splitInputDir" placeholder="选择包含 MP4 文件的目录" readonly />
+          <button @click="selectSplitInputDir" :disabled="isSplitting">选择</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>输出目录 *</label>
+        <div class="input-row">
+          <input v-model="splitOutputDir" placeholder="选择输出目录" readonly />
+          <button @click="selectSplitOutputDir" :disabled="isSplitting">选择</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>相似度阈值：{{ similarityThreshold }}%</label>
+        <input
+          v-model.number="similarityThreshold"
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          :disabled="isSplitting"
+          class="slider"
+        />
+        <div class="slider-labels">
+          <span>0%</span>
+          <span>50%</span>
+          <span>100%</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>转场检测窗口（秒）*</label>
+        <input
+          v-model.number="sceneDetectWindow"
+          type="number"
+          min="1"
+          max="60"
+          :disabled="isSplitting"
+        />
+      </div>
+
+      <button class="start-btn" @click="startSplit" :disabled="isSplitting">
+        {{ isSplitting ? "处理中..." : "开始拆解" }}
+      </button>
+
+      <div v-if="splitProgress" class="progress-box">
+        <div>{{ splitProgress }}</div>
+        <div v-if="splitProgressPercent > 0" class="progress-bar">
+          <div class="progress-fill" :style="{ width: splitProgressPercent + '%' }"></div>
+        </div>
+        <div v-if="splitProgressPercent > 0" class="progress-percent">{{ splitProgressPercent }}%</div>
+      </div>
+
+      <div v-if="splitError" class="error-box">
+        {{ splitError }}
       </div>
     </div>
   </main>
@@ -213,6 +400,50 @@ h1 {
   text-align: center;
   margin-bottom: 30px;
   font-size: 24px;
+}
+
+/* Tab 导航栏样式 */
+.tab-nav {
+  display: flex;
+  gap: 0;
+  margin-bottom: 30px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 12px 20px;
+  border: none;
+  background-color: transparent;
+  color: #666;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: all 0.25s;
+  margin-bottom: -2px;
+}
+
+.tab-btn:hover {
+  color: #333;
+}
+
+.tab-btn.active {
+  color: #396cd8;
+  border-bottom-color: #396cd8;
+}
+
+.tab-content {
+  animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .form-group {
@@ -247,6 +478,20 @@ input[readonly] {
 
 input[type="number"] {
   width: 100%;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 6px;
+  cursor: pointer;
+}
+
+.slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
 }
 
 button {
@@ -286,6 +531,27 @@ button:disabled {
   border-radius: 8px;
   color: #0d47a1;
   white-space: pre-wrap;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background-color: #d0e8ff;
+  border-radius: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #2196f3;
+  transition: width 0.3s ease;
+}
+
+.progress-percent {
+  text-align: right;
+  font-size: 12px;
+  margin-top: 4px;
 }
 
 .error-box {
@@ -390,6 +656,43 @@ button:disabled {
     background-color: #3e3420;
     border-color: #8b7000;
     color: #ffd54f;
+  }
+
+  .tab-nav {
+    border-bottom-color: #444;
+  }
+
+  .tab-btn {
+    color: #aaa;
+  }
+
+  .tab-btn:hover {
+    color: #ddd;
+  }
+
+  .tab-btn.active {
+    color: #64b5f6;
+    border-bottom-color: #64b5f6;
+  }
+
+  .progress-box {
+    background-color: #1a3a52;
+    border-color: #0d47a1;
+    color: #64b5f6;
+  }
+
+  .progress-bar {
+    background-color: #0d3b66;
+  }
+
+  .error-box {
+    background-color: #3e1f1f;
+    border-color: #c62828;
+    color: #ff8a80;
+  }
+
+  .slider-labels {
+    color: #666;
   }
 }
 </style>
