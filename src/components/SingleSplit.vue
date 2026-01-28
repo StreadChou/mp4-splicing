@@ -24,7 +24,7 @@
     />
 
     <!-- 输出设置 -->
-    <div v-if="splitterRef?.selectedSegments.length > 0" class="form-group">
+    <div v-if="splitterRef?.selectedSegments && splitterRef.selectedSegments.length > 0" class="form-group">
       <label>输出目录（可选，默认为视频所在目录）</label>
       <div class="input-row">
         <input v-model="splitOutputDir" placeholder="选择输出目录" readonly />
