@@ -13,12 +13,17 @@
     "windows": [
       {
         "title": "mp4handler",
-        "width": 600,
-        "height": 700
+        "width": 1200,
+        "height": 900,
+        "maximized": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "bundle": {
