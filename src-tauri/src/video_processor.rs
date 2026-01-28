@@ -1,4 +1,5 @@
 use rand::seq::SliceRandom;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::Write;
@@ -22,8 +23,8 @@ pub struct CompatibilityResult {
     pub videos_info: Vec<(String, VideoInfo)>,
 }
 
-/// 从目录中随机选择指定数量的 MP4 视频
-fn get_random_videos(dir: &str, count: usize) -> Result<(Vec<PathBuf>, usize), String> {
+/// 收集目录中的 MP4 视频（支持最大递归层数）
+fn collect_videos(dir: &str, max_depth: usize) -> Result<Vec<PathBuf>, String> {
     let path = Path::new(dir);
     if !path.exists() {
         return Err(format!("目录不存在: {}", dir));
@@ -32,7 +33,9 @@ fn get_random_videos(dir: &str, count: usize) -> Result<(Vec<PathBuf>, usize), S
         return Err(format!("路径不是目录: {}", dir));
     }
 
+    let depth_limit = max_depth.saturating_add(1);
     let mut videos: Vec<PathBuf> = WalkDir::new(path)
+        .max_depth(depth_limit)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -49,15 +52,8 @@ fn get_random_videos(dir: &str, count: usize) -> Result<(Vec<PathBuf>, usize), S
     if videos.is_empty() {
         return Err(format!("在目录中未找到 MP4 文件: {}", dir));
     }
-
-    let available_count = videos.len();
-    let actual_count = count.min(available_count);
-
-    let mut rng = rand::thread_rng();
-    videos.shuffle(&mut rng);
-    videos.truncate(actual_count);
-
-    Ok((videos, available_count))
+    videos.sort();
+    Ok(videos)
 }
 
 /// 使用 FFprobe 检测视频信息
@@ -200,7 +196,10 @@ pub async fn concat_videos(
     app: AppHandle,
     input_dir: String,
     ending_video: Option<String>,
-    random_count: usize,
+    random_count_min: usize,
+    random_count_max: usize,
+    max_depth: usize,
+    run_times: usize,
     output_dir: String,
 ) -> Result<String, String> {
     let window = app.get_webview_window("main").unwrap();
@@ -212,8 +211,14 @@ pub async fn concat_videos(
     if output_dir.is_empty() {
         return Err("输出目录不能为空".to_string());
     }
-    if random_count == 0 {
+    if random_count_min == 0 || random_count_max == 0 {
         return Err("随机数量必须大于 0".to_string());
+    }
+    if random_count_min > random_count_max {
+        return Err("随机数量范围不合法".to_string());
+    }
+    if run_times == 0 {
+        return Err("执行次数必须大于 0".to_string());
     }
 
     // 发送进度
@@ -221,105 +226,157 @@ pub async fn concat_videos(
         .emit("progress", "正在扫描视频文件...")
         .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
-    // 随机选择视频
-    let (mut videos, available_count) = get_random_videos(&input_dir, random_count)?;
+    // 收集视频列表
+    let all_videos = collect_videos(&input_dir, max_depth)?;
+    let available_count = all_videos.len();
 
-    if random_count > available_count {
+    if available_count == 0 {
+        return Err(format!("在目录中未找到 MP4 文件: {}", input_dir));
+    }
+
+    let mut output_paths = Vec::new();
+    let base_timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+    for run_index in 1..=run_times {
+        let desired_count = if random_count_min == random_count_max {
+            random_count_min
+        } else {
+            rand::thread_rng().gen_range(random_count_min..=random_count_max)
+        };
+
+        let actual_count = desired_count.min(available_count);
+        let mut videos = all_videos.clone();
+        {
+            let mut rng = rand::thread_rng();
+            videos.shuffle(&mut rng);
+        }
+        videos.truncate(actual_count);
+
+        if desired_count > available_count {
+            window
+                .emit(
+                    "progress",
+                    format!(
+                        "第 {}/{} 次：请求 {} 个视频，但只找到 {} 个，将使用全部 {} 个视频",
+                        run_index, run_times, desired_count, available_count, available_count
+                    ),
+                )
+                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        } else {
+            window
+                .emit(
+                    "progress",
+                    format!("第 {}/{} 次：已选择 {} 个视频", run_index, run_times, videos.len()),
+                )
+                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        }
+
+        // 添加结尾视频
+        if let Some(ending) = &ending_video {
+            if !ending.is_empty() {
+                let ending_path = PathBuf::from(ending);
+                if !ending_path.exists() {
+                    return Err(format!("结尾视频不存在: {}", ending));
+                }
+                videos.push(ending_path);
+                window
+                    .emit("progress", "已添加结尾视频")
+                    .map_err(|e| format!("发送进度事件失败: {}", e))?;
+            }
+        }
+
+        // 检测兼容性
         window
             .emit(
                 "progress",
-                format!(
-                    "请求 {} 个视频，但只找到 {} 个，将使用全部 {} 个视频",
-                    random_count, available_count, available_count
-                ),
+                format!("第 {}/{} 次：正在检测视频兼容性...", run_index, run_times),
             )
             .map_err(|e| format!("发送进度事件失败: {}", e))?;
-    } else {
-        window
-            .emit("progress", format!("已选择 {} 个视频", videos.len()))
-            .map_err(|e| format!("发送进度事件失败: {}", e))?;
-    }
 
-    // 添加结尾视频
-    if let Some(ending) = ending_video {
-        if !ending.is_empty() {
-            let ending_path = PathBuf::from(&ending);
-            if !ending_path.exists() {
-                return Err(format!("结尾视频不存在: {}", ending));
-            }
-            videos.push(ending_path);
-            window
-                .emit("progress", "已添加结尾视频")
-                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        let compatibility = check_video_compatibility(&app, &videos).await?;
+
+        if !compatibility.compatible {
+            return Err(format!(
+                "INCOMPATIBLE_VIDEOS:第 {} 次生成：\n{}",
+                run_index, compatibility.message
+            ));
         }
-    }
 
-    // 检测兼容性
-    window
-        .emit("progress", "正在检测视频兼容性...")
-        .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        // 创建临时目录
+        let temp_dir = std::env::temp_dir()
+            .join(format!("mp4handler_{}_{}", base_timestamp, run_index));
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
 
-    let compatibility = check_video_compatibility(&app, &videos).await?;
+        // 创建 concat 文件
+        let concat_file = create_concat_file(&videos, &temp_dir)?;
 
-    if !compatibility.compatible {
-        return Err(format!("INCOMPATIBLE_VIDEOS:{}", compatibility.message));
-    }
+        // 生成输出文件名
+        let output_file_name = if run_times == 1 {
+            format!("output_{}.mp4", base_timestamp)
+        } else {
+            format!("output_{}_{}.mp4", base_timestamp, run_index)
+        };
+        let output_path = PathBuf::from(&output_dir).join(output_file_name);
 
-    // 创建临时目录
-    let temp_dir = std::env::temp_dir().join(format!("mp4handler_{}", chrono::Local::now().timestamp()));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+        // 调用 FFmpeg 拼接（快速模式）
+        window
+            .emit(
+                "progress",
+                format!("第 {}/{} 次：正在拼接视频（快速模式）...", run_index, run_times),
+            )
+            .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
-    // 创建 concat 文件
-    let concat_file = create_concat_file(&videos, &temp_dir)?;
+        let sidecar = app
+            .shell()
+            .sidecar("ffmpeg")
+            .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
 
-    // 生成输出文件名
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let output_path = PathBuf::from(&output_dir).join(format!("output_{}.mp4", timestamp));
+        let output = sidecar
+            .args(&[
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_file.to_str().unwrap(),
+                "-c",
+                "copy",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
 
-    // 调用 FFmpeg 拼接（快速模式）
-    window
-        .emit("progress", "正在拼接视频（快速模式）...")
-        .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        // 清理临时文件
+        let _ = fs::remove_dir_all(&temp_dir);
 
-    let sidecar = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "FFmpeg 执行失败: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
 
-    let output = sidecar
-        .args(&[
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file.to_str().unwrap(),
-            "-c",
-            "copy",
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
-
-    // 清理临时文件
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    if !output.status.success() {
-        return Err(format!(
-            "FFmpeg 执行失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        output_paths.push(output_path);
     }
 
     window
         .emit("progress", "完成！")
         .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
-    Ok(format!(
-        "视频拼接完成！输出文件: {}",
-        output_path.display()
-    ))
+    if output_paths.len() == 1 {
+        Ok(format!(
+            "视频拼接完成！输出文件: {}",
+            output_paths[0].display()
+        ))
+    } else {
+        let list = output_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(format!("视频拼接完成！共生成 {} 个视频：\n{}", output_paths.len(), list))
+    }
 }
 
 /// 备选命令：重新编码拼接视频
@@ -328,7 +385,10 @@ pub async fn concat_videos_with_reencode(
     app: AppHandle,
     input_dir: String,
     ending_video: Option<String>,
-    random_count: usize,
+    random_count_min: usize,
+    random_count_max: usize,
+    max_depth: usize,
+    run_times: usize,
     output_dir: String,
 ) -> Result<String, String> {
     let window = app.get_webview_window("main").unwrap();
@@ -340,8 +400,14 @@ pub async fn concat_videos_with_reencode(
     if output_dir.is_empty() {
         return Err("输出目录不能为空".to_string());
     }
-    if random_count == 0 {
+    if random_count_min == 0 || random_count_max == 0 {
         return Err("随机数量必须大于 0".to_string());
+    }
+    if random_count_min > random_count_max {
+        return Err("随机数量范围不合法".to_string());
+    }
+    if run_times == 0 {
+        return Err("执行次数必须大于 0".to_string());
     }
 
     // 发送进度
@@ -349,100 +415,149 @@ pub async fn concat_videos_with_reencode(
         .emit("progress", "正在扫描视频文件...")
         .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
-    // 随机选择视频
-    let (mut videos, available_count) = get_random_videos(&input_dir, random_count)?;
+    // 收集视频列表
+    let all_videos = collect_videos(&input_dir, max_depth)?;
+    let available_count = all_videos.len();
 
-    if random_count > available_count {
+    if available_count == 0 {
+        return Err(format!("在目录中未找到 MP4 文件: {}", input_dir));
+    }
+
+    let mut output_paths = Vec::new();
+    let base_timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+    for run_index in 1..=run_times {
+        let desired_count = if random_count_min == random_count_max {
+            random_count_min
+        } else {
+            rand::thread_rng().gen_range(random_count_min..=random_count_max)
+        };
+
+        let actual_count = desired_count.min(available_count);
+        let mut videos = all_videos.clone();
+        {
+            let mut rng = rand::thread_rng();
+            videos.shuffle(&mut rng);
+        }
+        videos.truncate(actual_count);
+
+        if desired_count > available_count {
+            window
+                .emit(
+                    "progress",
+                    format!(
+                        "第 {}/{} 次：请求 {} 个视频，但只找到 {} 个，将使用全部 {} 个视频",
+                        run_index, run_times, desired_count, available_count, available_count
+                    ),
+                )
+                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        } else {
+            window
+                .emit(
+                    "progress",
+                    format!("第 {}/{} 次：已选择 {} 个视频", run_index, run_times, videos.len()),
+                )
+                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        }
+
+        // 添加结尾视频
+        if let Some(ending) = &ending_video {
+            if !ending.is_empty() {
+                let ending_path = PathBuf::from(ending);
+                if !ending_path.exists() {
+                    return Err(format!("结尾视频不存在: {}", ending));
+                }
+                videos.push(ending_path);
+                window
+                    .emit("progress", "已添加结尾视频")
+                    .map_err(|e| format!("发送进度事件失败: {}", e))?;
+            }
+        }
+
+        // 创建临时目录
+        let temp_dir = std::env::temp_dir()
+            .join(format!("mp4handler_{}_{}", base_timestamp, run_index));
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+        // 创建 concat 文件
+        let concat_file = create_concat_file(&videos, &temp_dir)?;
+
+        // 生成输出文件名
+        let output_file_name = if run_times == 1 {
+            format!("output_{}.mp4", base_timestamp)
+        } else {
+            format!("output_{}_{}.mp4", base_timestamp, run_index)
+        };
+        let output_path = PathBuf::from(&output_dir).join(output_file_name);
+
+        // 调用 FFmpeg 拼接（重新编码模式）
         window
             .emit(
                 "progress",
                 format!(
-                    "请求 {} 个视频，但只找到 {} 个，将使用全部 {} 个视频",
-                    random_count, available_count, available_count
+                    "第 {}/{} 次：正在拼接视频（重新编码模式，这可能需要较长时间）...",
+                    run_index, run_times
                 ),
             )
             .map_err(|e| format!("发送进度事件失败: {}", e))?;
-    } else {
-        window
-            .emit("progress", format!("已选择 {} 个视频", videos.len()))
-            .map_err(|e| format!("发送进度事件失败: {}", e))?;
-    }
 
-    // 添加结尾视频
-    if let Some(ending) = ending_video {
-        if !ending.is_empty() {
-            let ending_path = PathBuf::from(&ending);
-            if !ending_path.exists() {
-                return Err(format!("结尾视频不存在: {}", ending));
-            }
-            videos.push(ending_path);
-            window
-                .emit("progress", "已添加结尾视频")
-                .map_err(|e| format!("发送进度事件失败: {}", e))?;
+        let sidecar = app
+            .shell()
+            .sidecar("ffmpeg")
+            .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
+
+        let output = sidecar
+            .args(&[
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_file.to_str().unwrap(),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
+
+        // 清理临时文件
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        if !output.status.success() {
+            return Err(format!(
+                "FFmpeg 执行失败: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
-    }
 
-    // 创建临时目录
-    let temp_dir = std::env::temp_dir().join(format!("mp4handler_{}", chrono::Local::now().timestamp()));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-    // 创建 concat 文件
-    let concat_file = create_concat_file(&videos, &temp_dir)?;
-
-    // 生成输出文件名
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let output_path = PathBuf::from(&output_dir).join(format!("output_{}.mp4", timestamp));
-
-    // 调用 FFmpeg 拼接（重新编码模式）
-    window
-        .emit("progress", "正在拼接视频（重新编码模式，这可能需要较长时间）...")
-        .map_err(|e| format!("发送进度事件失败: {}", e))?;
-
-    let sidecar = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
-
-    let output = sidecar
-        .args(&[
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_file.to_str().unwrap(),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "fast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            output_path.to_str().unwrap(),
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
-
-    // 清理临时文件
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    if !output.status.success() {
-        return Err(format!(
-            "FFmpeg 执行失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        output_paths.push(output_path);
     }
 
     window
         .emit("progress", "完成！")
         .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
-    Ok(format!(
-        "视频拼接完成！输出文件: {}",
-        output_path.display()
-    ))
+    if output_paths.len() == 1 {
+        Ok(format!(
+            "视频拼接完成！输出文件: {}",
+            output_paths[0].display()
+        ))
+    } else {
+        let list = output_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(format!("视频拼接完成！共生成 {} 个视频：\n{}", output_paths.len(), list))
+    }
 }

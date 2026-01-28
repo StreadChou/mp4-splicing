@@ -9,6 +9,11 @@
     </div>
 
     <div class="form-group">
+      <label>最大递归层数</label>
+      <input v-model.number="maxDepth" type="number" min="0" :disabled="isProcessing" />
+    </div>
+
+    <div class="form-group">
       <label>结尾视频（可选）</label>
       <div class="input-row">
         <input v-model="endingVideo" placeholder="选择结尾视频" readonly />
@@ -17,8 +22,13 @@
     </div>
 
     <div class="form-group">
-      <label>随机视频数量 *</label>
-      <input v-model.number="randomCount" type="number" min="1" :disabled="isProcessing" />
+      <label>随机多少个视频合成一个视频 *</label>
+      <input v-model="randomCountRange" type="text" placeholder="例如 2,4 表示 2-4 之间随机" :disabled="isProcessing" />
+    </div>
+
+    <div class="form-group">
+      <label>执行次数（最终会生成多少个视频） *</label>
+      <input v-model.number="runTimes" type="number" min="1" :disabled="isProcessing" />
     </div>
 
     <div class="form-group">
@@ -64,7 +74,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 const inputDir = ref("");
 const endingVideo = ref("");
-const randomCount = ref(3);
+const maxDepth = ref(2);
+const randomCountRange = ref("2,4");
+const runTimes = ref(1);
 const outputDir = ref("");
 const progressMsg = ref("");
 const errorMsg = ref("");
@@ -114,6 +126,31 @@ async function selectOutputDir() {
   }
 }
 
+function parseRandomCountRange(value: string): { min: number; max: number } | null {
+  const normalized = value.replace("，", ",").trim();
+  if (!normalized) return null;
+
+  let minStr = normalized;
+  let maxStr = normalized;
+
+  if (normalized.includes(",")) {
+    const parts = normalized.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length !== 2) return null;
+    [minStr, maxStr] = parts;
+  } else if (normalized.includes("-")) {
+    const parts = normalized.split("-").map((s) => s.trim()).filter(Boolean);
+    if (parts.length !== 2) return null;
+    [minStr, maxStr] = parts;
+  }
+
+  const min = Number(minStr);
+  const max = Number(maxStr);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  if (min <= 0 || max <= 0) return null;
+
+  return min <= max ? { min, max } : { min: max, max: min };
+}
+
 // 开始拼接
 async function startConcat() {
   errorMsg.value = "";
@@ -128,8 +165,17 @@ async function startConcat() {
     errorMsg.value = "请选择输出目录";
     return;
   }
-  if (randomCount.value <= 0) {
-    errorMsg.value = "随机数量必须大于 0";
+  if (maxDepth.value < 0) {
+    errorMsg.value = "最大递归层数不能小于 0";
+    return;
+  }
+  const range = parseRandomCountRange(randomCountRange.value);
+  if (!range) {
+    errorMsg.value = "随机数量格式错误，请输入如 2,4 或 3";
+    return;
+  }
+  if (runTimes.value <= 0) {
+    errorMsg.value = "执行次数必须大于 0";
     return;
   }
 
@@ -139,7 +185,10 @@ async function startConcat() {
     const result = await invoke<string>("concat_videos", {
       inputDir: inputDir.value,
       endingVideo: endingVideo.value || null,
-      randomCount: randomCount.value,
+      randomCountMin: range.min,
+      randomCountMax: range.max,
+      maxDepth: maxDepth.value,
+      runTimes: runTimes.value,
       outputDir: outputDir.value,
     });
     progressMsg.value = result;
@@ -173,10 +222,23 @@ async function concatWithReencode() {
   isProcessing.value = true;
 
   try {
+    const range = parseRandomCountRange(randomCountRange.value);
+    if (!range) {
+      errorMsg.value = "随机数量格式错误，请输入如 2,4 或 3";
+      return;
+    }
+    if (runTimes.value <= 0) {
+      errorMsg.value = "执行次数必须大于 0";
+      return;
+    }
+
     const result = await invoke<string>("concat_videos_with_reencode", {
       inputDir: inputDir.value,
       endingVideo: endingVideo.value || null,
-      randomCount: randomCount.value,
+      randomCountMin: range.min,
+      randomCountMax: range.max,
+      maxDepth: maxDepth.value,
+      runTimes: runTimes.value,
       outputDir: outputDir.value,
     });
     progressMsg.value = result;
