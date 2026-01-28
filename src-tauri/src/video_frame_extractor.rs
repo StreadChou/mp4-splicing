@@ -198,12 +198,20 @@ pub async fn extract_all_frames(
         }),
     );
 
+    let vf_filter = if metadata.fps > 0.0 {
+        format!("fps={:.6},scale=320:-1", metadata.fps)
+    } else {
+        "scale=320:-1".to_string()
+    };
+
     let output = sidecar
         .args(&[
             "-i",
             &video_path,
             "-vf",
-            "scale=320:-1",
+            &vf_filter,
+            "-vsync",
+            "0",
             "-q:v",
             "3",
             "-y",
@@ -285,9 +293,10 @@ pub async fn generate_video_segments(
         let segment_num = idx + 1;
         let output_file = output_base_dir.join(format!("{}_{}.mp4", video_name, segment_num));
 
-        // 计算时间戳
+        // 计算时间戳（按帧号精确转换，包含结束帧）
         let start_time = segment.start_frame as f64 / metadata.fps;
-        let end_time = segment.end_frame as f64 / metadata.fps;
+        let duration =
+            (segment.end_frame.saturating_sub(segment.start_frame) + 1) as f64 / metadata.fps;
 
         // 发送进度
         let _ = window.emit(
@@ -308,12 +317,12 @@ pub async fn generate_video_segments(
 
         let output = sidecar
             .args(&[
-                "-ss",
-                &start_time.to_string(),
                 "-i",
                 &video_path,
-                "-to",
-                &end_time.to_string(),
+                "-ss",
+                &start_time.to_string(),
+                "-t",
+                &duration.to_string(),
                 "-c:v",
                 "libx264",
                 "-preset",
