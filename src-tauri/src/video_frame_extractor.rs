@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
+use crate::frame_similarity::{calculate_similarity, SimilarityAlgorithm};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VideoMetadata {
@@ -423,3 +424,208 @@ pub fn delete_video_file(file_path: String) -> Result<(), String> {
     fs::remove_file(path).map_err(|e| format!("删除文件失败: {}", e))?;
     Ok(())
 }
+
+// 自动拆解视频（基于帧相似度）
+#[tauri::command]
+pub async fn auto_split_video(
+    app: AppHandle,
+    video_path: String,
+    output_dir: String,
+    algorithm: String,
+    threshold: f64,
+    min_duration: f64,
+) -> Result<String, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("无法获取窗口")?;
+
+    // 解析算法
+    let algo = SimilarityAlgorithm::from_str(&algorithm)?;
+
+    // 获取视频元数据
+    let metadata = get_video_metadata_internal(&app, &video_path).await?;
+
+    // 提取所有帧
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": "正在提取视频帧...",
+            "percent": 0,
+        }),
+    );
+
+    let frames = extract_all_frames_internal(&app, &video_path).await?;
+
+    if frames.len() < 2 {
+        return Err("视频帧数不足".to_string());
+    }
+
+    // 计算最小帧数
+    let min_frames = (min_duration * metadata.fps).round() as u32;
+
+    // 逐帧对比，找到切分点
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": "正在分析帧相似度...",
+            "percent": 10,
+        }),
+    );
+
+    let mut split_points = vec![0u32]; // 起始帧
+    let mut last_split_frame = 0u32;
+
+    for i in 1..frames.len() {
+        let prev_frame = &frames[i - 1];
+        let curr_frame = &frames[i];
+
+        // 计算相似度
+        let similarity = calculate_similarity(
+            &prev_frame.image_path,
+            &curr_frame.image_path,
+            algo,
+        )?;
+
+        // 如果相似度低于阈值，且距离上次切分点足够远
+        if similarity < threshold {
+            let frames_since_last_split = curr_frame.frame_number - last_split_frame;
+            if frames_since_last_split >= min_frames {
+                split_points.push(curr_frame.frame_number);
+                last_split_frame = curr_frame.frame_number;
+            }
+        }
+
+        // 发送进度
+        if i % 50 == 0 || i == frames.len() - 1 {
+            let _ = window.emit(
+                "auto_split_progress",
+                serde_json::json!({
+                    "message": format!("已分析 {}/{} 帧", i + 1, frames.len()),
+                    "percent": 10 + ((i + 1) as f64 / frames.len() as f64 * 60.0) as u32,
+                }),
+            );
+        }
+    }
+
+    // 添加结束帧
+    if split_points.last() != Some(&(frames.len() as u32 - 1)) {
+        split_points.push(frames.len() as u32 - 1);
+    }
+
+    // 生成片段范围
+    let mut segments = Vec::new();
+    for i in 0..split_points.len() - 1 {
+        segments.push(SegmentRange {
+            start_frame: split_points[i],
+            end_frame: split_points[i + 1] - 1,
+        });
+    }
+
+    if segments.is_empty() {
+        return Err("未检测到场景切换，无法拆分".to_string());
+    }
+
+    // 生成视频片段
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": "正在生成视频片段...",
+            "percent": 70,
+        }),
+    );
+
+    let result = generate_video_segments(app, video_path, segments, output_dir).await?;
+
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": "完成",
+            "percent": 100,
+        }),
+    );
+
+    Ok(result)
+}
+
+// 内部使用的帧提取（不发送进度事件）
+async fn extract_all_frames_internal(
+    app: &AppHandle,
+    video_path: &str,
+) -> Result<Vec<FrameInfo>, String> {
+    let metadata = get_video_metadata_internal(app, video_path).await?;
+
+    // 创建临时目录
+    let video_hash = calculate_hash(video_path);
+    let temp_dir = std::env::temp_dir()
+        .join(format!("mp4handler_{}", video_hash))
+        .join("frames");
+
+    // 清理旧的帧
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir).map_err(|e| format!("清理临时目录失败: {}", e))?;
+    }
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    // 使用 FFmpeg 提取所有帧
+    let output_pattern = temp_dir.join("frame_%05d.jpg");
+    let sidecar = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
+
+    let vf_filter = if metadata.fps > 0.0 {
+        format!("fps={:.6},scale=320:-1", metadata.fps)
+    } else {
+        "scale=320:-1".to_string()
+    };
+
+    let output = sidecar
+        .args(&[
+            "-i",
+            video_path,
+            "-vf",
+            &vf_filter,
+            "-vsync",
+            "0",
+            "-q:v",
+            "3",
+            "-y",
+            output_pattern.to_str().unwrap(),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "提取帧失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // 扫描生成的帧文件
+    let mut frames = Vec::new();
+    let mut entries: Vec<_> = fs::read_dir(&temp_dir)
+        .map_err(|e| format!("读取临时目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .collect();
+
+    entries.sort_by_key(|e| e.path());
+
+    for (idx, entry) in entries.iter().enumerate() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("jpg") {
+            let frame_number = idx as u32;
+            let timestamp = frame_number as f64 / metadata.fps;
+
+            frames.push(FrameInfo {
+                frame_number,
+                timestamp,
+                image_path: path.to_string_lossy().to_string(),
+            });
+        }
+    }
+
+    Ok(frames)
+}
+

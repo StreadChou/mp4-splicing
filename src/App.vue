@@ -25,6 +25,13 @@
         >
           批量拆解
         </button>
+        <button
+          class="tab-btn"
+          :class="{ active: activeTab === 'auto-split' }"
+          @click="activeTab = 'auto-split'"
+        >
+          自动拆解
+        </button>
       </div>
 
       <!-- 右侧内容区域 -->
@@ -43,6 +50,11 @@
         <div v-show="activeTab === 'batch-split'" class="tab-content">
           <BatchSplit />
         </div>
+
+        <!-- 自动拆解 -->
+        <div v-show="activeTab === 'auto-split'" class="tab-content">
+          <AutoSplit />
+        </div>
       </div>
     </div>
   </main>
@@ -53,8 +65,9 @@ import { ref } from "vue";
 import VideoConcat from "./components/VideoConcat.vue";
 import SingleSplit from "./components/SingleSplit.vue";
 import BatchSplit from "./components/BatchSplit.vue";
+import AutoSplit from "./components/AutoSplit.vue";
 
-const activeTab = ref<'concat' | 'split' | 'batch-split'>('concat');
+const activeTab = ref<'concat' | 'split' | 'batch-split' | 'auto-split'>('concat');
 </script>
 
 <style>
