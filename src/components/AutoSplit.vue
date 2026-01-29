@@ -53,6 +53,14 @@
         <div class="slider-hint">片段长度必须大于此值</div>
       </div>
 
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" v-model="unattended" />
+          无人值守模式
+        </label>
+        <div class="slider-hint">启用后自动保留原视频并处理下一个</div>
+      </div>
+
       <button class="start-btn" @click="startAutoSplit">
         开始自动拆解
       </button>
@@ -92,7 +100,7 @@
       </div>
 
       <!-- 处理完成后的操作按钮 -->
-      <div v-if="currentTaskCompleted && !isProcessing" class="batch-complete-actions">
+      <div v-if="currentTaskCompleted && !isProcessing && !unattended" class="batch-complete-actions">
         <button @click="deleteAndNext" class="btn-delete">删除原视频并处理下一个</button>
         <button @click="nextWithoutDelete" class="btn-next">保留原视频并处理下一个</button>
       </div>
@@ -134,6 +142,7 @@ const batchOutputDir = ref("");
 const algorithm = ref("histogram");
 const threshold = ref(70);
 const minDuration = ref(2.0);
+const unattended = ref(false);
 
 const batchTasks = ref<VideoTask[]>([]);
 const currentTaskIndex = ref(0);
@@ -302,7 +311,16 @@ async function processCurrentTask() {
     });
 
     currentTaskCompleted.value = true;
-    alert(result);
+
+    // 无人值守模式：自动保留原视频并继续下一个
+    if (unattended.value) {
+      task.status = "completed";
+      await saveBatchProgress();
+      currentTaskIndex.value++;
+      await processCurrentTask();
+    } else {
+      alert(result);
+    }
   } catch (err) {
     error.value = String(err);
     task.status = "error";
@@ -408,6 +426,19 @@ input[readonly] {
 select {
   cursor: pointer;
   background-color: white;
+}
+
+.checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: auto;
+  cursor: pointer;
 }
 
 .slider {

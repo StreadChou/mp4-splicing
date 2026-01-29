@@ -71,16 +71,6 @@ jobs:
           cd src-tauri/target/release/bundle/macos
           zip -r mp4handler-macos-portable.zip mp4handler.app
 
-      - name: Create portable archive (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          cd src-tauri/target/release
-          mkdir mp4handler-portable
-          cp mp4handler.exe mp4handler-portable/
-          cp -r ../../binaries/ffmpeg-x86_64-pc-windows-msvc.exe mp4handler-portable/ffmpeg.exe
-          cp -r ../../binaries/ffprobe-x86_64-pc-windows-msvc.exe mp4handler-portable/ffprobe.exe
-          Compress-Archive -Path mp4handler-portable -DestinationPath mp4handler-windows-portable.zip
-
       - name: Upload artifacts (macOS)
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
@@ -97,4 +87,3 @@ jobs:
           name: windows-build
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/mp4handler-windows-portable.zip
