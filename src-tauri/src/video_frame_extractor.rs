@@ -3,8 +3,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
+use rayon::prelude::*;
 use crate::frame_similarity::{calculate_similarity, SimilarityAlgorithm};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -475,16 +478,45 @@ pub async fn auto_split_video(
     let mut split_points = vec![0u32]; // 起始帧
     let mut last_split_frame = 0u32;
 
-    for i in 1..frames.len() {
-        let prev_frame = &frames[i - 1];
-        let curr_frame = &frames[i];
+    // 并行计算所有帧对的相似度
+    let progress_counter = Arc::new(AtomicUsize::new(0));
+    let total_frames = frames.len();
+    let window_clone = window.clone();
 
-        // 计算相似度
-        let similarity = calculate_similarity(
-            &prev_frame.image_path,
-            &curr_frame.image_path,
-            algo,
-        )?;
+    let similarities: Vec<(usize, f64)> = (1..frames.len())
+        .into_par_iter()
+        .map(|i| {
+            let prev_frame = &frames[i - 1];
+            let curr_frame = &frames[i];
+
+            let similarity = calculate_similarity(
+                &prev_frame.image_path,
+                &curr_frame.image_path,
+                algo,
+            ).unwrap_or(1.0); // 出错时默认为完全相似
+
+            // 更新进度计数器
+            let current = progress_counter.fetch_add(1, Ordering::Relaxed);
+
+            // 每 100 帧发送一次进度（减少开销）
+            if current % 100 == 0 {
+                let percent = 10 + ((current as f64 / total_frames as f64) * 60.0) as u32;
+                let _ = window_clone.emit(
+                    "auto_split_progress",
+                    serde_json::json!({
+                        "message": format!("已分析 {}/{} 帧", current, total_frames),
+                        "percent": percent,
+                    }),
+                );
+            }
+
+            (i, similarity)
+        })
+        .collect();
+
+    // 串行处理切分点（需要维护状态）
+    for (i, similarity) in similarities {
+        let curr_frame = &frames[i];
 
         // 如果相似度低于阈值，且距离上次切分点足够远
         if similarity < threshold {
@@ -494,18 +526,16 @@ pub async fn auto_split_video(
                 last_split_frame = curr_frame.frame_number;
             }
         }
-
-        // 发送进度
-        if i % 50 == 0 || i == frames.len() - 1 {
-            let _ = window.emit(
-                "auto_split_progress",
-                serde_json::json!({
-                    "message": format!("已分析 {}/{} 帧", i + 1, frames.len()),
-                    "percent": 10 + ((i + 1) as f64 / frames.len() as f64 * 60.0) as u32,
-                }),
-            );
-        }
     }
+
+    // 发送最终进度
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": format!("已分析 {}/{} 帧", total_frames, total_frames),
+            "percent": 70,
+        }),
+    );
 
     // 添加结束帧
     if split_points.last() != Some(&(frames.len() as u32 - 1)) {

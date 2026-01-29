@@ -29,4 +29,5 @@ walkdir = "2"
 chrono = "0.4"
 image = "0.24"
 imageproc = "0.23"
+rayon = "1.10"
 
