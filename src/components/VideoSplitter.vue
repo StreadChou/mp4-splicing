@@ -53,11 +53,17 @@
         </div>
 
         <!-- 滚动区域 -->
-        <q-scroll-area style="height: 400px;" class="frames-scroll-area">
+        <q-scroll-area ref="scrollAreaRef" style="height: 400px;" class="frames-scroll-area">
           <div class="frames-grid">
             <template v-for="frame in allFrames" :key="frame.frame_number">
               <!-- 如果是片段的第一帧，显示占位符 -->
-              <q-card v-if="isSegmentStart(frame.frame_number)" flat bordered class="frame-placeholder">
+              <q-card
+                v-if="isSegmentStart(frame.frame_number)"
+                v-memo="[frame.frame_number]"
+                flat
+                bordered
+                class="frame-placeholder"
+              >
                 <q-card-section class="text-center">
                   <q-icon name="folder" size="md" color="grey-6" />
                   <div class="text-caption text-grey-7 q-mt-xs">
@@ -74,11 +80,12 @@
               <!-- 否则显示正常的帧 -->
               <q-card
                 v-else
+                v-memo="[frame.frame_number, isFrameSelected(frame.frame_number)]"
                 flat
                 bordered
                 class="frame-item cursor-pointer"
                 :class="{
-                  'frame-selected': currentSelection && frame.frame_number >= currentSelection.start && frame.frame_number <= currentSelection.end
+                  'frame-selected': isFrameSelected(frame.frame_number)
                 }"
                 @click="selectFrame(frame.frame_number)"
               >
@@ -195,6 +202,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { QScrollArea } from "quasar";
 
 interface VideoMetadata {
   width: number;
@@ -248,10 +256,17 @@ const emit = defineEmits<{
 
 const selectedSegments = ref<SegmentRange[]>([]);
 const currentSelection = ref<{ start: number; end: number } | null>(null);
+const scrollAreaRef = ref<QScrollArea | null>(null);
 
 // 转换资源路径
 function convertAssetPath(path: string): string {
   return convertFileSrc(path);
+}
+
+// 判断帧是否被选中（使用 memo 优化）
+function isFrameSelected(frameNumber: number): boolean {
+  if (!currentSelection.value) return false;
+  return frameNumber >= currentSelection.value.start && frameNumber <= currentSelection.value.end;
 }
 
 // 选择帧
@@ -279,6 +294,11 @@ function addSegment() {
   selectedSegments.value.push({ start_frame: start, end_frame: end });
   currentSelection.value = null;
   emit('segmentsChange', selectedSegments.value);
+
+  // 滚动到顶部
+  if (scrollAreaRef.value) {
+    scrollAreaRef.value.setScrollPosition('vertical', 0, 300);
+  }
 }
 
 // 删除片段
