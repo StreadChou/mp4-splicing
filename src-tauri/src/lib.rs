@@ -1,6 +1,7 @@
 mod video_processor;
 mod video_frame_extractor;
 mod frame_similarity;
+mod downloader;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -26,6 +27,7 @@ pub fn run() {
             video_frame_extractor::save_batch_progress,
             video_frame_extractor::delete_video_file,
             video_frame_extractor::auto_split_video,
+            downloader::batch_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

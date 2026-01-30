@@ -1,16 +1,46 @@
-# Tauri + Vue + TypeScript
+# MP4 视频处理工具
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+一个基于 Tauri 2.x + Vue 3 + TypeScript 开发的跨平台桌面应用，提供视频拼接、拆解和批量下载功能。
 
-## Recommended IDE Setup
+## 功能特性
 
-- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+### 1. 视频拼接
+- 从指定目录随机选择视频进行拼接
+- 支持添加固定结尾视频
+- 自动检测视频兼容性
+- 支持快速模式和重新编码模式
 
-## Type Support For `.vue` Imports in TS
+### 2. 视频拆解
+- **单个拆解**: 可视化帧选择界面，精确按帧切割
+- **批量拆解**: 批量处理多个视频，支持断点续传
+- **自动拆解**: 基于帧相似度智能检测场景切换点
 
-Since TypeScript cannot handle type information for `.vue` imports, they are shimmed to be a generic Vue component type by default. In most cases this is fine if you don't really care about component prop types outside of templates. However, if you wish to get actual prop types in `.vue` imports (for example to get props validation when using manual `h(...)` calls), you can enable Volar's Take Over mode by following these steps:
+### 3. 批量下载 (v0.1.11 新增)
+- 支持从多个 URL 并发下载视频
+- 实时显示下载进度和速度
+- 自动跳过空行和无效 URL
+- 可配置并发下载数量
 
-1. Run `Extensions: Show Built-in Extensions` from VS Code's command palette, look for `TypeScript and JavaScript Language Features`, then right click and select `Disable (Workspace)`. By default, Take Over mode will enable itself if the default TypeScript extension is disabled.
-2. Reload the VS Code window by running `Developer: Reload Window` from the command palette.
+## 技术栈
 
-You can learn more about Take Over mode [here](https://github.com/johnsoncodehk/volar/discussions/471).
+- **前端**: Vue 3 + TypeScript + Quasar
+- **后端**: Tauri 2.x + Rust
+- **视频处理**: FFmpeg (内置)
+- **网络请求**: reqwest + tokio
+
+## 开发
+
+```bash
+# 安装依赖
+yarn install
+
+# 开发模式
+yarn tauri dev
+
+# 打包
+yarn tauri build
+```
+
+## 许可证
+
+请确保遵守 FFmpeg 的 LGPL/GPL 许可证要求。
