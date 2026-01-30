@@ -2,107 +2,232 @@
   <div class="auto-split">
     <!-- 批量模式未启动 -->
     <div v-if="!isBatchMode">
-      <div class="form-group">
-        <label>输入文件夹 *</label>
-        <div class="input-row">
-          <input v-model="batchInputDir" placeholder="选择包含视频的文件夹" readonly />
-          <button @click="selectBatchInputDir">选择</button>
-        </div>
-      </div>
+      <q-card flat bordered>
+        <q-card-section>
+          <div class="text-h5 q-mb-md">
+            <q-icon name="auto_awesome" color="primary" size="sm" class="q-mr-sm" />
+            自动拆解
+          </div>
 
-      <div class="form-group">
-        <label>输出文件夹 *</label>
-        <div class="input-row">
-          <input v-model="batchOutputDir" placeholder="选择输出文件夹" readonly />
-          <button @click="selectBatchOutputDir">选择</button>
-        </div>
-      </div>
+          <q-form class="q-gutter-md">
+            <q-input
+              v-model="batchInputDir"
+              label="输入文件夹"
+              readonly
+              outlined
+              hint="选择包含视频的文件夹"
+            >
+              <template v-slot:prepend>
+                <q-icon name="folder" />
+              </template>
+              <template v-slot:append>
+                <q-btn
+                  icon="folder_open"
+                  color="primary"
+                  flat
+                  round
+                  dense
+                  @click="selectBatchInputDir"
+                >
+                  <q-tooltip>选择文件夹</q-tooltip>
+                </q-btn>
+              </template>
+            </q-input>
 
-      <div class="form-group">
-        <label>相似度算法</label>
-        <select v-model="algorithm">
-          <option value="histogram">直方图（快速）</option>
-          <option value="ssim">SSIM（准确）</option>
-          <option value="frame_diff">帧差异（简单）</option>
-        </select>
-      </div>
+            <q-input
+              v-model="batchOutputDir"
+              label="输出文件夹"
+              readonly
+              outlined
+              hint="拆解后的视频保存位置"
+            >
+              <template v-slot:prepend>
+                <q-icon name="save" />
+              </template>
+              <template v-slot:append>
+                <q-btn
+                  icon="folder_open"
+                  color="primary"
+                  flat
+                  round
+                  dense
+                  @click="selectBatchOutputDir"
+                >
+                  <q-tooltip>选择文件夹</q-tooltip>
+                </q-btn>
+              </template>
+            </q-input>
 
-      <div class="form-group">
-        <label>相似度阈值: {{ threshold }}%</label>
-        <input
-          type="range"
-          v-model.number="threshold"
-          min="0"
-          max="100"
-          step="1"
-          class="slider"
-        />
-        <div class="slider-hint">低于此阈值时切分场景</div>
-      </div>
+            <q-separator class="q-my-md" />
 
-      <div class="form-group">
-        <label>最小片段秒数</label>
-        <input
-          type="number"
-          v-model.number="minDuration"
-          min="0.5"
-          max="60"
-          step="0.5"
-          placeholder="2.0"
-        />
-        <div class="slider-hint">片段长度必须大于此值</div>
-      </div>
+            <q-select
+              v-model="algorithm"
+              :options="algorithmOptions"
+              label="相似度算法"
+              outlined
+              emit-value
+              map-options
+              hint="选择场景检测算法"
+            >
+              <template v-slot:prepend>
+                <q-icon name="psychology" />
+              </template>
+            </q-select>
 
-      <div class="form-group checkbox-group">
-        <label>
-          <input type="checkbox" v-model="unattended" />
-          无人值守模式
-        </label>
-        <div class="slider-hint">启用后自动保留原视频并处理下一个</div>
-      </div>
+            <div>
+              <div class="text-subtitle2 q-mb-sm">
+                <q-icon name="tune" class="q-mr-sm" />
+                相似度阈值: {{ threshold }}%
+              </div>
+              <q-slider
+                v-model="threshold"
+                :min="0"
+                :max="100"
+                :step="1"
+                label
+                label-always
+                color="primary"
+                markers
+              />
+              <div class="text-caption text-grey-7">低于此阈值时切分场景</div>
+            </div>
 
-      <button class="start-btn" @click="startAutoSplit">
-        开始自动拆解
-      </button>
+            <q-input
+              v-model.number="minDuration"
+              label="最小片段秒数"
+              type="number"
+              outlined
+              :min="0.5"
+              :max="60"
+              :step="0.5"
+              hint="片段长度必须大于此值"
+            >
+              <template v-slot:prepend>
+                <q-icon name="timer" />
+              </template>
+            </q-input>
 
-      <div v-if="error" class="error-box">
-        {{ error }}
-      </div>
+            <q-checkbox
+              v-model="unattended"
+              label="无人值守模式"
+              color="primary"
+            >
+              <template v-slot:default>
+                <div class="row items-center">
+                  <q-icon name="smart_toy" class="q-mr-sm" />
+                  <span>无人值守模式</span>
+                </div>
+              </template>
+            </q-checkbox>
+            <div class="text-caption text-grey-7 q-ml-lg">启用后自动保留原视频并处理下一个</div>
+
+            <q-separator class="q-my-md" />
+
+            <q-btn
+              label="开始自动拆解"
+              color="primary"
+              size="lg"
+              icon="play_arrow"
+              class="full-width"
+              @click="startAutoSplit"
+            />
+
+            <q-banner v-if="error" class="bg-negative text-white" rounded>
+              <template v-slot:avatar>
+                <q-icon name="error" color="white" />
+              </template>
+              {{ error }}
+            </q-banner>
+          </q-form>
+        </q-card-section>
+      </q-card>
     </div>
 
     <!-- 批量模式已启动 -->
     <div v-else class="batch-mode">
       <!-- 进度信息 -->
-      <div class="batch-header">
-        <h3>自动拆解进度: {{ currentTaskIndex + 1 }} / {{ batchTasks.length }}</h3>
-        <div class="batch-actions">
-          <button @click="skipCurrentVideo" class="btn-skip">跳过此视频</button>
-          <button @click="postponeCurrentVideo" class="btn-later">稍后处理</button>
-        </div>
-      </div>
+      <q-card flat bordered class="q-mb-md">
+        <q-card-section class="row items-center justify-between">
+          <div class="text-h6">
+            <q-icon name="auto_awesome" color="primary" class="q-mr-sm" />
+            自动拆解进度: {{ currentTaskIndex + 1 }} / {{ batchTasks.length }}
+          </div>
+          <div class="row q-gutter-sm">
+            <q-btn
+              label="跳过"
+              color="warning"
+              icon="skip_next"
+              @click="skipCurrentVideo"
+            >
+              <q-tooltip>跳过当前视频</q-tooltip>
+            </q-btn>
+            <q-btn
+              label="稍后处理"
+              color="info"
+              icon="schedule"
+              @click="postponeCurrentVideo"
+            >
+              <q-tooltip>将当前视频移到队列末尾</q-tooltip>
+            </q-btn>
+          </div>
+        </q-card-section>
+      </q-card>
 
-      <div class="current-video">
-        <h4>当前视频: {{ batchTasks[currentTaskIndex]?.name }}</h4>
-        <div v-if="videoMetadata" class="video-info">
-          <span>分辨率: {{ videoMetadata.width }}x{{ videoMetadata.height }}</span>
-          <span>帧率: {{ videoMetadata.fps.toFixed(2) }} fps</span>
-          <span>时长: {{ videoMetadata.duration.toFixed(2) }}s</span>
-        </div>
-      </div>
+      <q-card flat bordered class="q-mb-md">
+        <q-card-section>
+          <div class="text-h6 q-mb-sm">
+            <q-icon name="video_file" color="primary" class="q-mr-sm" />
+            当前视频: {{ batchTasks[currentTaskIndex]?.name }}
+          </div>
+          <div v-if="videoMetadata" class="row q-gutter-md text-grey-7">
+            <div class="row items-center">
+              <q-icon name="aspect_ratio" size="xs" class="q-mr-xs" />
+              <span>{{ videoMetadata.width }}x{{ videoMetadata.height }}</span>
+            </div>
+            <div class="row items-center">
+              <q-icon name="speed" size="xs" class="q-mr-xs" />
+              <span>{{ videoMetadata.fps.toFixed(2) }} fps</span>
+            </div>
+            <div class="row items-center">
+              <q-icon name="schedule" size="xs" class="q-mr-xs" />
+              <span>{{ videoMetadata.duration.toFixed(2) }}s</span>
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
 
       <!-- 处理进度 -->
-      <div v-if="isProcessing" class="progress-box">
-        {{ progressMsg }}
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: progress + '%' }"></div>
-        </div>
-        <div class="progress-percent">{{ progress }}%</div>
-      </div>
+      <q-card v-if="isProcessing" flat bordered class="q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle2 q-mb-sm">
+            <q-icon name="hourglass_empty" color="primary" class="q-mr-sm" />
+            {{ progressMsg }}
+          </div>
+          <q-linear-progress :value="progress / 100" color="primary" size="20px" rounded />
+          <div class="text-center q-mt-sm text-primary text-weight-medium">{{ progress }}%</div>
+        </q-card-section>
+      </q-card>
 
       <!-- 处理完成后的操作按钮 -->
-      <div v-if="currentTaskCompleted && !isProcessing && !unattended" class="batch-complete-actions">
-        <button @click="deleteAndNext" class="btn-delete">删除原视频并处理下一个</button>
-        <button @click="nextWithoutDelete" class="btn-next">保留原视频并处理下一个</button>
+      <div v-if="currentTaskCompleted && !isProcessing && !unattended" class="row q-gutter-md">
+        <q-btn
+          label="删除原视频并继续"
+          color="negative"
+          icon="delete"
+          class="col"
+          @click="deleteAndNext"
+        >
+          <q-tooltip>删除原视频文件，处理下一个</q-tooltip>
+        </q-btn>
+        <q-btn
+          label="保留原视频并继续"
+          color="positive"
+          icon="check"
+          class="col"
+          @click="nextWithoutDelete"
+        >
+          <q-tooltip>保留原视频文件，处理下一个</q-tooltip>
+        </q-btn>
       </div>
     </div>
   </div>
@@ -137,9 +262,15 @@ interface BatchProgress {
   current_index: number;
 }
 
+const algorithmOptions = [
+  { label: '直方图（快速）', value: 'histogram' },
+  { label: 'SSIM（准确）', value: 'ssim' },
+  { label: '帧差异（简单）', value: 'frame_diff' }
+];
+
 const batchInputDir = ref("");
 const batchOutputDir = ref("");
-const algorithm = ref("histogram");
+const algorithm = ref("ssim");
 const threshold = ref(70);
 const minDuration = ref(2.0);
 const unattended = ref(false);
@@ -390,302 +521,5 @@ async function nextWithoutDelete() {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-
-.form-group {
-  margin-bottom: 20px;
-  flex-shrink: 0;
-}
-
-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.input-row {
-  display: flex;
-  gap: 10px;
-}
-
-input[type="text"],
-input[type="number"],
-select {
-  width: 100%;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-input[readonly] {
-  background-color: #f5f5f5;
-  cursor: pointer;
-}
-
-select {
-  cursor: pointer;
-  background-color: white;
-}
-
-.checkbox-group label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-.checkbox-group input[type="checkbox"] {
-  width: auto;
-  cursor: pointer;
-}
-
-.slider {
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: #ddd;
-  outline: none;
-  -webkit-appearance: none;
-}
-
-.slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #396cd8;
-  cursor: pointer;
-}
-
-.slider::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #396cd8;
-  cursor: pointer;
-  border: none;
-}
-
-.slider-hint {
-  font-size: 12px;
-  color: #666;
-  margin-top: 5px;
-}
-
-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  background-color: #396cd8;
-  color: white;
-}
-
-button:hover:not(:disabled) {
-  background-color: #2c5ab8;
-}
-
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.start-btn {
-  width: 100%;
-  padding: 12px 24px;
-  font-size: 16px;
-  font-weight: 500;
-  margin-bottom: 20px;
-  flex-shrink: 0;
-}
-
-.batch-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f5f5f5;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.batch-header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.batch-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.btn-skip,
-.btn-later {
-  padding: 8px 16px;
-  font-size: 13px;
-}
-
-.btn-skip {
-  background-color: #ff9800;
-}
-
-.btn-skip:hover {
-  background-color: #f57c00;
-}
-
-.btn-later {
-  background-color: #2196f3;
-}
-
-.btn-later:hover {
-  background-color: #1976d2;
-}
-
-.current-video {
-  background-color: #f9f9f9;
-  padding: 15px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-}
-
-.current-video h4 {
-  margin: 0 0 10px 0;
-  font-size: 15px;
-}
-
-.video-info {
-  display: flex;
-  gap: 20px;
-  font-size: 13px;
-  color: #666;
-}
-
-.progress-box {
-  background-color: #f5f5f5;
-  padding: 20px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 24px;
-  background-color: #e0e0e0;
-  border-radius: 12px;
-  overflow: hidden;
-  margin: 10px 0;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #396cd8, #2c5ab8);
-  transition: width 0.3s ease;
-}
-
-.progress-percent {
-  text-align: center;
-  font-weight: 500;
-  color: #396cd8;
-}
-
-.batch-complete-actions {
-  display: flex;
-  gap: 15px;
-  margin-top: 20px;
-  flex-shrink: 0;
-}
-
-.btn-delete,
-.btn-next {
-  flex: 1;
-  padding: 12px 20px;
-  font-size: 14px;
-}
-
-.btn-delete {
-  background-color: #f44336;
-}
-
-.btn-delete:hover {
-  background-color: #d32f2f;
-}
-
-.btn-next {
-  background-color: #4caf50;
-}
-
-.btn-next:hover {
-  background-color: #45a049;
-}
-
-.error-box {
-  background-color: #ffebee;
-  border: 1px solid #f44336;
-  border-radius: 8px;
-  padding: 15px;
-  color: #c62828;
-  margin-top: 20px;
-  flex-shrink: 0;
-}
-
-@media (prefers-color-scheme: dark) {
-  input[type="text"],
-  input[type="number"],
-  select {
-    color: #ffffff;
-    background-color: #2f2f2f;
-    border-color: #555;
-  }
-
-  input[readonly] {
-    background-color: #1f1f1f;
-  }
-
-  select {
-    background-color: #2f2f2f;
-  }
-
-  .slider {
-    background: #555;
-  }
-
-  .slider-hint {
-    color: #aaa;
-  }
-
-  .batch-header {
-    background-color: #2f2f2f;
-    color: white;
-  }
-
-  .current-video {
-    background-color: #2f2f2f;
-    color: white;
-  }
-
-  .video-info {
-    color: #aaa;
-  }
-
-  .progress-box {
-    background-color: #2f2f2f;
-    color: white;
-  }
-
-  .progress-bar {
-    background-color: #555;
-  }
-
-  .error-box {
-    background-color: #3e1f1f;
-    border-color: #c62828;
-    color: #ff8a80;
-  }
 }
 </style>

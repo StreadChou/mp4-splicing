@@ -1,12 +1,39 @@
 <template>
   <div class="single-split">
-    <div class="form-group">
-      <label>选择视频文件 *</label>
-      <div class="input-row">
-        <input v-model="splitVideoFile" placeholder="选择 MP4 视频文件" readonly />
-        <button @click="selectSplitVideoFile" :disabled="isLoadingMetadata || isGeneratingSegments">选择</button>
-      </div>
-    </div>
+    <q-card flat bordered class="q-mb-md">
+      <q-card-section>
+        <div class="text-h5 q-mb-md">
+          <q-icon name="content_cut" color="primary" size="sm" class="q-mr-sm" />
+          视频拆解
+        </div>
+
+        <q-input
+          v-model="splitVideoFile"
+          label="选择视频文件"
+          readonly
+          outlined
+          :disable="isLoadingMetadata || isGeneratingSegments"
+          hint="选择要拆解的 MP4 视频文件"
+        >
+          <template v-slot:prepend>
+            <q-icon name="video_file" />
+          </template>
+          <template v-slot:append>
+            <q-btn
+              icon="folder_open"
+              color="primary"
+              flat
+              round
+              dense
+              @click="selectSplitVideoFile"
+              :disable="isLoadingMetadata || isGeneratingSegments"
+            >
+              <q-tooltip>选择视频</q-tooltip>
+            </q-btn>
+          </template>
+        </q-input>
+      </q-card-section>
+    </q-card>
 
     <VideoSplitter
       v-if="splitVideoFile"
@@ -24,13 +51,35 @@
     />
 
     <!-- 输出设置 -->
-    <div v-if="splitterRef?.selectedSegments && splitterRef.selectedSegments.length > 0" class="form-group">
-      <label>输出目录（可选，默认为视频所在目录）</label>
-      <div class="input-row">
-        <input v-model="splitOutputDir" placeholder="选择输出目录" readonly />
-        <button @click="selectSplitOutputDir" :disabled="isGeneratingSegments">选择</button>
-      </div>
-    </div>
+    <q-card v-if="splitterRef?.selectedSegments && splitterRef.selectedSegments.length > 0" flat bordered class="q-mt-md">
+      <q-card-section>
+        <q-input
+          v-model="splitOutputDir"
+          label="输出目录（可选）"
+          readonly
+          outlined
+          :disable="isGeneratingSegments"
+          hint="默认为视频所在目录"
+        >
+          <template v-slot:prepend>
+            <q-icon name="save" />
+          </template>
+          <template v-slot:append>
+            <q-btn
+              icon="folder_open"
+              color="primary"
+              flat
+              round
+              dense
+              @click="selectSplitOutputDir"
+              :disable="isGeneratingSegments"
+            >
+              <q-tooltip>选择目录</q-tooltip>
+            </q-btn>
+          </template>
+        </q-input>
+      </q-card-section>
+    </q-card>
   </div>
 </template>
 
@@ -183,66 +232,5 @@ async function handleGenerate(segments: SegmentRange[]) {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-
-.form-group {
-  margin-bottom: 20px;
-  flex-shrink: 0;
-}
-
-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.input-row {
-  display: flex;
-  gap: 10px;
-}
-
-input {
-  flex: 1;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-input[readonly] {
-  background-color: #f5f5f5;
-  cursor: pointer;
-}
-
-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  background-color: #396cd8;
-  color: white;
-}
-
-button:hover:not(:disabled) {
-  background-color: #2c5ab8;
-}
-
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-@media (prefers-color-scheme: dark) {
-  input {
-    color: #ffffff;
-    background-color: #2f2f2f;
-    border-color: #555;
-  }
-
-  input[readonly] {
-    background-color: #1f1f1f;
-  }
 }
 </style>

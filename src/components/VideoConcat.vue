@@ -1,69 +1,206 @@
 <template>
   <div class="video-concat">
-    <div class="form-group">
-      <label>输入目录 *</label>
-      <div class="input-row">
-        <input v-model="inputDir" placeholder="选择包含 MP4 文件的目录" readonly />
-        <button @click="selectInputDir" :disabled="isProcessing">选择</button>
-      </div>
-    </div>
+    <q-card flat bordered>
+      <q-card-section>
+        <div class="text-h5 q-mb-md">
+          <q-icon name="merge" color="primary" size="sm" class="q-mr-sm" />
+          视频拼接
+        </div>
 
-    <div class="form-group">
-      <label>最大递归层数</label>
-      <input v-model.number="maxDepth" type="number" min="0" :disabled="isProcessing" />
-    </div>
+        <q-form class="q-gutter-md" style="max-width: 800px">
+          <q-input
+            v-model="inputDir"
+            label="输入目录"
+            readonly
+            outlined
+            :disable="isProcessing"
+            hint="选择包含 MP4 文件的目录"
+          >
+            <template v-slot:prepend>
+              <q-icon name="folder" />
+            </template>
+            <template v-slot:append>
+              <q-btn
+                icon="folder_open"
+                color="primary"
+                flat
+                round
+                dense
+                @click="selectInputDir"
+                :disable="isProcessing"
+              >
+                <q-tooltip>选择目录</q-tooltip>
+              </q-btn>
+            </template>
+          </q-input>
 
-    <div class="form-group">
-      <label>结尾视频（可选）</label>
-      <div class="input-row">
-        <input v-model="endingVideo" placeholder="选择结尾视频" readonly />
-        <button @click="selectEndingVideo" :disabled="isProcessing">选择</button>
-      </div>
-    </div>
+          <q-input
+            v-model.number="maxDepth"
+            label="最大递归层数"
+            type="number"
+            outlined
+            :disable="isProcessing"
+            :rules="[val => val >= 0 || '不能小于 0']"
+            hint="搜索子目录的深度"
+          >
+            <template v-slot:prepend>
+              <q-icon name="account_tree" />
+            </template>
+          </q-input>
 
-    <div class="form-group">
-      <label>随机多少个视频合成一个视频 *</label>
-      <input v-model="randomCountRange" type="text" placeholder="例如 2,4 表示 2-4 之间随机" :disabled="isProcessing" />
-    </div>
+          <q-input
+            v-model="endingVideo"
+            label="结尾视频（可选）"
+            readonly
+            outlined
+            :disable="isProcessing"
+            hint="在每个拼接视频末尾添加的固定视频"
+          >
+            <template v-slot:prepend>
+              <q-icon name="video_file" />
+            </template>
+            <template v-slot:append>
+              <q-btn
+                icon="folder_open"
+                color="primary"
+                flat
+                round
+                dense
+                @click="selectEndingVideo"
+                :disable="isProcessing"
+              >
+                <q-tooltip>选择视频</q-tooltip>
+              </q-btn>
+            </template>
+          </q-input>
 
-    <div class="form-group">
-      <label>执行次数（最终会生成多少个视频） *</label>
-      <input v-model.number="runTimes" type="number" min="1" :disabled="isProcessing" />
-    </div>
+          <q-input
+            v-model="randomCountRange"
+            label="随机视频数量"
+            placeholder="例如 2,4 表示 2-4 之间随机"
+            outlined
+            :disable="isProcessing"
+            hint="每个拼接视频包含的随机视频数量范围"
+          >
+            <template v-slot:prepend>
+              <q-icon name="shuffle" />
+            </template>
+          </q-input>
 
-    <div class="form-group">
-      <label>输出目录 *</label>
-      <div class="input-row">
-        <input v-model="outputDir" placeholder="选择输出目录" readonly />
-        <button @click="selectOutputDir" :disabled="isProcessing">选择</button>
-      </div>
-    </div>
+          <q-input
+            v-model.number="runTimes"
+            label="执行次数"
+            type="number"
+            outlined
+            :disable="isProcessing"
+            :rules="[val => val > 0 || '必须大于 0']"
+            hint="最终会生成多少个拼接视频"
+          >
+            <template v-slot:prepend>
+              <q-icon name="repeat" />
+            </template>
+          </q-input>
 
-    <button class="start-btn" @click="startConcat" :disabled="isProcessing">
-      {{ isProcessing ? "处理中..." : "开始拼接" }}
-    </button>
+          <q-input
+            v-model="outputDir"
+            label="输出目录"
+            readonly
+            outlined
+            :disable="isProcessing"
+            hint="拼接后的视频保存位置"
+          >
+            <template v-slot:prepend>
+              <q-icon name="save" />
+            </template>
+            <template v-slot:append>
+              <q-btn
+                icon="folder_open"
+                color="primary"
+                flat
+                round
+                dense
+                @click="selectOutputDir"
+                :disable="isProcessing"
+              >
+                <q-tooltip>选择目录</q-tooltip>
+              </q-btn>
+            </template>
+          </q-input>
 
-    <div v-if="progressMsg" class="progress-box">
-      {{ progressMsg }}
-    </div>
+          <q-separator class="q-my-md" />
 
-    <div v-if="errorMsg" class="error-box">
-      {{ errorMsg }}
-    </div>
+          <q-btn
+            :label="isProcessing ? '处理中...' : '开始拼接'"
+            color="primary"
+            size="lg"
+            icon="play_arrow"
+            class="full-width"
+            @click="startConcat"
+            :disable="isProcessing"
+            :loading="isProcessing"
+          />
+
+          <q-banner v-if="progressMsg" class="bg-positive text-white" rounded>
+            <template v-slot:avatar>
+              <q-icon name="check_circle" color="white" />
+            </template>
+            {{ progressMsg }}
+          </q-banner>
+
+          <q-banner v-if="errorMsg" class="bg-negative text-white" rounded>
+            <template v-slot:avatar>
+              <q-icon name="error" color="white" />
+            </template>
+            {{ errorMsg }}
+          </q-banner>
+        </q-form>
+      </q-card-section>
+    </q-card>
 
     <!-- 兼容性确认对话框 -->
-    <div v-if="showCompatDialog" class="dialog-overlay">
-      <div class="dialog">
-        <h2>视频格式不兼容</h2>
-        <p class="compat-message">{{ compatMessage }}</p>
-        <p>请选择处理方式：</p>
-        <div class="dialog-buttons">
-          <button @click="concatDirect" class="btn-warning">直接拼接（可能失败）</button>
-          <button @click="concatWithReencode" class="btn-primary">重新编码后拼接（较慢但保证成功）</button>
-          <button @click="cancelDialog" class="btn-secondary">取消</button>
-        </div>
-      </div>
-    </div>
+    <q-dialog v-model="showCompatDialog">
+      <q-card style="min-width: 400px">
+        <q-card-section>
+          <div class="text-h6">
+            <q-icon name="warning" color="warning" class="q-mr-sm" />
+            视频格式不兼容
+          </div>
+        </q-card-section>
+
+        <q-card-section>
+          <q-banner class="bg-warning text-dark" rounded dense>
+            {{ compatMessage }}
+          </q-banner>
+          <p class="q-mt-md text-body2">请选择处理方式：</p>
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn
+            label="直接拼接"
+            color="warning"
+            icon="fast_forward"
+            @click="concatDirect"
+          >
+            <q-tooltip>可能失败，但速度快</q-tooltip>
+          </q-btn>
+          <q-btn
+            label="重新编码后拼接"
+            color="positive"
+            icon="settings"
+            @click="concatWithReencode"
+          >
+            <q-tooltip>较慢但保证成功</q-tooltip>
+          </q-btn>
+          <q-btn
+            label="取消"
+            color="grey"
+            flat
+            icon="close"
+            @click="cancelDialog"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -255,192 +392,3 @@ function cancelDialog() {
 }
 </script>
 
-<style scoped>
-.video-concat {
-  max-width: 600px;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.input-row {
-  display: flex;
-  gap: 10px;
-}
-
-input {
-  flex: 1;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-input[readonly] {
-  background-color: #f5f5f5;
-  cursor: pointer;
-}
-
-input[type="number"] {
-  width: 100%;
-}
-
-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.start-btn {
-  width: 100%;
-  padding: 12px 24px;
-  font-size: 16px;
-  font-weight: 500;
-  background-color: #396cd8;
-  color: white;
-}
-
-.start-btn:hover:not(:disabled) {
-  background-color: #2c5ab8;
-}
-
-.progress-box {
-  background-color: #e7f3ff;
-  border: 1px solid #2196f3;
-  border-radius: 8px;
-  padding: 15px;
-  margin-top: 20px;
-}
-
-.error-box {
-  background-color: #ffebee;
-  border: 1px solid #f44336;
-  border-radius: 8px;
-  padding: 15px;
-  color: #c62828;
-  margin-top: 20px;
-}
-
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.dialog {
-  background-color: white;
-  border-radius: 12px;
-  padding: 30px;
-  max-width: 500px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-}
-
-.dialog h2 {
-  margin-top: 0;
-  margin-bottom: 15px;
-  font-size: 20px;
-}
-
-.compat-message {
-  background-color: #fff3cd;
-  border: 1px solid #ffc107;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 15px;
-  color: #856404;
-}
-
-.dialog-buttons {
-  display: flex;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.dialog-buttons button {
-  flex: 1;
-}
-
-.btn-warning {
-  background-color: #ff9800;
-  color: white;
-}
-
-.btn-warning:hover {
-  background-color: #f57c00;
-}
-
-.btn-primary {
-  background-color: #4caf50;
-  color: white;
-}
-
-.btn-primary:hover {
-  background-color: #45a049;
-}
-
-.btn-secondary {
-  background-color: #9e9e9e;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background-color: #757575;
-}
-
-@media (prefers-color-scheme: dark) {
-  input {
-    color: #ffffff;
-    background-color: #2f2f2f;
-    border-color: #555;
-  }
-
-  input[readonly] {
-    background-color: #1f1f1f;
-  }
-
-  .dialog {
-    background-color: #2f2f2f;
-    color: #f6f6f6;
-  }
-
-  .compat-message {
-    background-color: #3e3420;
-    border-color: #8b7000;
-    color: #ffd54f;
-  }
-
-  .progress-box {
-    background-color: #1a3a52;
-    border-color: #0d47a1;
-    color: #64b5f6;
-  }
-
-  .error-box {
-    background-color: #3e1f1f;
-    border-color: #c62828;
-    color: #ff8a80;
-  }
-}
-</style>

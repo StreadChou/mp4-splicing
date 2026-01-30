@@ -2,41 +2,113 @@
   <div class="batch-split">
     <!-- 批量模式未启动 -->
     <div v-if="!isBatchMode">
-      <div class="form-group">
-        <label>输入文件夹 *</label>
-        <div class="input-row">
-          <input v-model="batchInputDir" placeholder="选择包含视频的文件夹" readonly />
-          <button @click="selectBatchInputDir">选择</button>
-        </div>
-      </div>
+      <q-card flat bordered>
+        <q-card-section>
+          <div class="text-h5 q-mb-md">
+            <q-icon name="splitscreen" color="primary" size="sm" class="q-mr-sm" />
+            批量拆解
+          </div>
 
-      <div class="form-group">
-        <label>输出文件夹 *</label>
-        <div class="input-row">
-          <input v-model="batchOutputDir" placeholder="选择输出文件夹" readonly />
-          <button @click="selectBatchOutputDir">选择</button>
-        </div>
-      </div>
+          <q-form class="q-gutter-md">
+            <q-input
+              v-model="batchInputDir"
+              label="输入文件夹"
+              readonly
+              outlined
+              hint="选择包含视频的文件夹"
+            >
+              <template v-slot:prepend>
+                <q-icon name="folder" />
+              </template>
+              <template v-slot:append>
+                <q-btn
+                  icon="folder_open"
+                  color="primary"
+                  flat
+                  round
+                  dense
+                  @click="selectBatchInputDir"
+                >
+                  <q-tooltip>选择文件夹</q-tooltip>
+                </q-btn>
+              </template>
+            </q-input>
 
-      <button class="start-btn" @click="startBatchSplit">
-        开始读取
-      </button>
+            <q-input
+              v-model="batchOutputDir"
+              label="输出文件夹"
+              readonly
+              outlined
+              hint="拆解后的视频保存位置"
+            >
+              <template v-slot:prepend>
+                <q-icon name="save" />
+              </template>
+              <template v-slot:append>
+                <q-btn
+                  icon="folder_open"
+                  color="primary"
+                  flat
+                  round
+                  dense
+                  @click="selectBatchOutputDir"
+                >
+                  <q-tooltip>选择文件夹</q-tooltip>
+                </q-btn>
+              </template>
+            </q-input>
 
-      <div v-if="error" class="error-box">
-        {{ error }}
-      </div>
+            <q-separator class="q-my-md" />
+
+            <q-btn
+              label="开始读取"
+              color="primary"
+              size="lg"
+              icon="play_arrow"
+              class="full-width"
+              @click="startBatchSplit"
+            />
+
+            <q-banner v-if="error" class="bg-negative text-white" rounded>
+              <template v-slot:avatar>
+                <q-icon name="error" color="white" />
+              </template>
+              {{ error }}
+            </q-banner>
+          </q-form>
+        </q-card-section>
+      </q-card>
     </div>
 
     <!-- 批量模式已启动 -->
     <div v-else class="batch-mode">
       <!-- 进度信息 -->
-      <div class="batch-header">
-        <h3>批量拆解进度: {{ currentTaskIndex + 1 }} / {{ batchTasks.length }}</h3>
-        <div class="batch-actions">
-          <button @click="skipCurrentVideo" class="btn-skip">跳过（不拆解）</button>
-          <button @click="postponeCurrentVideo" class="btn-later">稍后拆解</button>
-        </div>
-      </div>
+      <q-card flat bordered class="q-mb-md">
+        <q-card-section class="row items-center justify-between">
+          <div class="text-h6">
+            <q-icon name="splitscreen" color="primary" class="q-mr-sm" />
+            批量拆解进度: {{ currentTaskIndex + 1 }} / {{ batchTasks.length }}
+          </div>
+          <div class="row q-gutter-sm">
+            <q-btn
+              label="跳过"
+              color="warning"
+              icon="skip_next"
+              @click="skipCurrentVideo"
+            >
+              <q-tooltip>跳过当前视频，不进行拆解</q-tooltip>
+            </q-btn>
+            <q-btn
+              label="稍后处理"
+              color="info"
+              icon="schedule"
+              @click="postponeCurrentVideo"
+            >
+              <q-tooltip>将当前视频移到队列末尾</q-tooltip>
+            </q-btn>
+          </div>
+        </q-card-section>
+      </q-card>
 
       <VideoSplitter
         v-if="videoMetadata"
@@ -57,27 +129,48 @@
       />
 
       <!-- 生成按钮 -->
-      <button
+      <q-btn
         v-if="hasSegments && !isGeneratingSegments && !segmentsGenerated"
-        class="start-btn"
+        label="开始生成"
+        color="primary"
+        size="lg"
+        icon="play_arrow"
+        class="full-width q-mt-md"
         @click="generateCurrentVideo"
-      >
-        开始生成
-      </button>
+      />
 
       <!-- 生成中的进度 -->
-      <div v-if="isGeneratingSegments" class="progress-box">
-        {{ progressMsg }}
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: segmentProgress + '%' }"></div>
-        </div>
-        <div class="progress-percent">{{ segmentProgress }}%</div>
-      </div>
+      <q-card v-if="isGeneratingSegments" flat bordered class="q-mt-md">
+        <q-card-section>
+          <div class="text-subtitle2 q-mb-sm">
+            <q-icon name="hourglass_empty" color="primary" class="q-mr-sm" />
+            {{ progressMsg }}
+          </div>
+          <q-linear-progress :value="segmentProgress / 100" color="primary" size="20px" rounded />
+          <div class="text-center q-mt-sm text-primary text-weight-medium">{{ segmentProgress }}%</div>
+        </q-card-section>
+      </q-card>
 
       <!-- 生成完成后的操作按钮 -->
-      <div v-if="segmentsGenerated && !isGeneratingSegments" class="batch-complete-actions">
-        <button @click="deleteAndNext" class="btn-delete">删除本视频并编辑下一个</button>
-        <button @click="nextWithoutDelete" class="btn-next">不删除直接编辑下一个</button>
+      <div v-if="segmentsGenerated && !isGeneratingSegments" class="row q-gutter-md q-mt-md">
+        <q-btn
+          label="删除原视频并继续"
+          color="negative"
+          icon="delete"
+          class="col"
+          @click="deleteAndNext"
+        >
+          <q-tooltip>删除原视频文件，处理下一个</q-tooltip>
+        </q-btn>
+        <q-btn
+          label="保留原视频并继续"
+          color="positive"
+          icon="check"
+          class="col"
+          @click="nextWithoutDelete"
+        >
+          <q-tooltip>保留原视频文件，处理下一个</q-tooltip>
+        </q-btn>
       </div>
     </div>
   </div>
@@ -433,169 +526,5 @@ async function nextWithoutDelete() {
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-
-.form-group {
-  margin-bottom: 20px;
-  flex-shrink: 0;
-}
-
-label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-
-.input-row {
-  display: flex;
-  gap: 10px;
-}
-
-input {
-  flex: 1;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-}
-
-input[readonly] {
-  background-color: #f5f5f5;
-  cursor: pointer;
-}
-
-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  background-color: #396cd8;
-  color: white;
-}
-
-button:hover:not(:disabled) {
-  background-color: #2c5ab8;
-}
-
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.start-btn {
-  width: 100%;
-  padding: 12px 24px;
-  font-size: 16px;
-  font-weight: 500;
-  margin-bottom: 20px;
-  flex-shrink: 0;
-}
-
-.batch-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f5f5f5;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.batch-header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.batch-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.btn-skip,
-.btn-later {
-  padding: 8px 16px;
-  font-size: 13px;
-}
-
-.btn-skip {
-  background-color: #ff9800;
-}
-
-.btn-skip:hover {
-  background-color: #f57c00;
-}
-
-.btn-later {
-  background-color: #2196f3;
-}
-
-.btn-later:hover {
-  background-color: #1976d2;
-}
-
-.batch-complete-actions {
-  display: flex;
-  gap: 15px;
-  margin-top: 20px;
-  flex-shrink: 0;
-}
-
-.btn-delete,
-.btn-next {
-  flex: 1;
-  padding: 12px 20px;
-  font-size: 14px;
-}
-
-.btn-delete {
-  background-color: #f44336;
-}
-
-.btn-delete:hover {
-  background-color: #d32f2f;
-}
-
-.btn-next {
-  background-color: #4caf50;
-}
-
-.btn-next:hover {
-  background-color: #45a049;
-}
-
-.error-box {
-  background-color: #ffebee;
-  border: 1px solid #f44336;
-  border-radius: 8px;
-  padding: 15px;
-  color: #c62828;
-  margin-top: 20px;
-  flex-shrink: 0;
-}
-
-@media (prefers-color-scheme: dark) {
-  input {
-    color: #ffffff;
-    background-color: #2f2f2f;
-    border-color: #555;
-  }
-
-  input[readonly] {
-    background-color: #1f1f1f;
-  }
-
-  .batch-header {
-    background-color: #2f2f2f;
-      color: white;
-  }
-
-  .error-box {
-    background-color: #3e1f1f;
-    border-color: #c62828;
-    color: #ff8a80;
-  }
 }
 </style>
