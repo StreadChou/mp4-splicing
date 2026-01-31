@@ -107,6 +107,37 @@
               </template>
             </q-input>
 
+            <!-- 新增：掐头去尾选项 -->
+            <div class="q-gutter-sm">
+              <q-checkbox
+                v-model="skipFirst"
+                label="掐头（跳过第一个片段）"
+                color="primary"
+              >
+                <template v-slot:default>
+                  <div class="row items-center">
+                    <q-icon name="skip_previous" class="q-mr-sm" />
+                    <span>掐头</span>
+                  </div>
+                </template>
+              </q-checkbox>
+              <div class="text-caption text-grey-7 q-ml-lg">启用后不输出第一个识别的片段</div>
+
+              <q-checkbox
+                v-model="skipLast"
+                label="去尾（跳过最后一个片段）"
+                color="primary"
+              >
+                <template v-slot:default>
+                  <div class="row items-center">
+                    <q-icon name="skip_next" class="q-mr-sm" />
+                    <span>去尾</span>
+                  </div>
+                </template>
+              </q-checkbox>
+              <div class="text-caption text-grey-7 q-ml-lg">启用后不输出最后一个识别的片段（默认启用）</div>
+            </div>
+
             <q-checkbox
               v-model="unattended"
               label="无人值守模式"
@@ -274,6 +305,8 @@ const algorithm = ref("ssim");
 const threshold = ref(70);
 const minDuration = ref(2.0);
 const unattended = ref(false);
+const skipFirst = ref(false);   // 新增：掐头
+const skipLast = ref(true);      // 新增：去尾（默认勾选）
 
 const batchTasks = ref<VideoTask[]>([]);
 const currentTaskIndex = ref(0);
@@ -439,6 +472,8 @@ async function processCurrentTask() {
       algorithm: algorithm.value,
       threshold: threshold.value / 100.0, // 转换为 0-1 范围
       minDuration: minDuration.value,
+      skipFirst: skipFirst.value,    // 新增
+      skipLast: skipLast.value,      // 新增
     });
 
     currentTaskCompleted.value = true;

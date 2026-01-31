@@ -11,7 +11,10 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let pool_manager = video_processor::VideoPoolManager::new();  // 新增
+
     tauri::Builder::default()
+        .manage(pool_manager)  // 新增：注册全局状态
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())

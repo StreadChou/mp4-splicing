@@ -2,9 +2,101 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::Mutex;
+use std::collections::HashMap;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::ShellExt;
 use walkdir::WalkDir;
+
+/// 视频池状态
+#[derive(Debug, Clone)]
+pub struct VideoPoolState {
+    pub all_videos: Vec<PathBuf>,      // 完整视频列表
+    pub remaining_videos: Vec<PathBuf>, // 剩余可用视频
+}
+
+/// 全局视频池管理器
+pub struct VideoPoolManager {
+    pools: Mutex<HashMap<String, VideoPoolState>>,
+}
+
+impl VideoPoolManager {
+    pub fn new() -> Self {
+        Self {
+            pools: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 生成池子的唯一key（目录路径 + 递归深度）
+    fn make_key(input_dir: &str, max_depth: usize) -> String {
+        format!("{}::{}", input_dir, max_depth)
+    }
+
+    /// 获取或创建视频池
+    pub fn get_or_create_pool(
+        &self,
+        input_dir: &str,
+        max_depth: usize,
+        all_videos: Vec<PathBuf>,
+    ) -> VideoPoolState {
+        let key = Self::make_key(input_dir, max_depth);
+        let mut pools = self.pools.lock().unwrap();
+
+        if let Some(pool) = pools.get(&key) {
+            // 检查池子是否需要刷新（目录内容可能变化）
+            if pool.all_videos.len() == all_videos.len() {
+                return pool.clone();
+            }
+        }
+
+        // 创建新池子
+        let pool = VideoPoolState {
+            all_videos: all_videos.clone(),
+            remaining_videos: all_videos.clone(),
+        };
+
+        pools.insert(key, pool.clone());
+        pool
+    }
+
+    /// 从池子中抽取视频（不放回）
+    pub fn draw_videos(
+        &self,
+        input_dir: &str,
+        max_depth: usize,
+        count: usize,
+    ) -> Result<Vec<PathBuf>, String> {
+        let key = Self::make_key(input_dir, max_depth);
+        let mut pools = self.pools.lock().unwrap();
+
+        let pool = pools.get_mut(&key)
+            .ok_or("视频池不存在，请先初始化")?;
+
+        // 如果剩余视频不足，重新填充池子
+        if pool.remaining_videos.is_empty() {
+            pool.remaining_videos = pool.all_videos.clone();
+        }
+
+        // 随机打乱剩余视频
+        let mut rng = rand::thread_rng();
+        pool.remaining_videos.shuffle(&mut rng);
+
+        // 抽取指定数量
+        let actual_count = count.min(pool.remaining_videos.len());
+        let selected: Vec<PathBuf> = pool.remaining_videos
+            .drain(0..actual_count)
+            .collect();
+
+        Ok(selected)
+    }
+
+    /// 获取池子剩余视频数量
+    pub fn get_remaining_count(&self, input_dir: &str, max_depth: usize) -> usize {
+        let key = Self::make_key(input_dir, max_depth);
+        let pools = self.pools.lock().unwrap();
+        pools.get(&key).map(|p| p.remaining_videos.len()).unwrap_or(0)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VideoInfo {
@@ -244,6 +336,7 @@ fn build_concat_filter(
 #[tauri::command]
 pub async fn concat_videos(
     app: AppHandle,
+    pool_manager: State<'_, VideoPoolManager>,  // 新增
     input_dir: String,
     ending_video: Option<String>,
     random_count_min: usize,
@@ -287,6 +380,9 @@ pub async fn concat_videos(
     let mut output_paths = Vec::new();
     let base_timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
 
+    // 初始化视频池
+    pool_manager.get_or_create_pool(&input_dir, max_depth, all_videos.clone());
+
     for run_index in 1..=run_times {
         let desired_count = if random_count_min == random_count_max {
             random_count_min
@@ -295,12 +391,9 @@ pub async fn concat_videos(
         };
 
         let actual_count = desired_count.min(available_count);
-        let mut videos = all_videos.clone();
-        {
-            let mut rng = rand::thread_rng();
-            videos.shuffle(&mut rng);
-        }
-        videos.truncate(actual_count);
+
+        // 从池子中抽取视频（不放回）
+        let mut videos = pool_manager.draw_videos(&input_dir, max_depth, actual_count)?;
 
         if desired_count > available_count {
             window
@@ -313,11 +406,16 @@ pub async fn concat_videos(
                 )
                 .map_err(|e| format!("发送进度事件失败: {}", e))?;
         } else {
-            window
-                .emit(
-                    "progress",
-                    format!("第 {}/{} 次：已选择 {} 个视频", run_index, run_times, videos.len()),
-                )
+            // 检查是否触发了池子重填
+            let remaining = pool_manager.get_remaining_count(&input_dir, max_depth);
+
+            let msg = if remaining + videos.len() == available_count {
+                format!("第 {}/{} 次：池子已抽完，重新填充。本次选择 {} 个视频", run_index, run_times, videos.len())
+            } else {
+                format!("第 {}/{} 次：已选择 {} 个视频（池子剩余 {}）", run_index, run_times, videos.len(), remaining)
+            };
+
+            window.emit("progress", msg)
                 .map_err(|e| format!("发送进度事件失败: {}", e))?;
         }
 
@@ -453,6 +551,7 @@ pub async fn concat_videos(
 #[tauri::command]
 pub async fn concat_videos_with_reencode(
     app: AppHandle,
+    pool_manager: State<'_, VideoPoolManager>,  // 新增
     input_dir: String,
     ending_video: Option<String>,
     random_count_min: usize,
@@ -496,6 +595,9 @@ pub async fn concat_videos_with_reencode(
     let mut output_paths = Vec::new();
     let base_timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
 
+    // 初始化视频池
+    pool_manager.get_or_create_pool(&input_dir, max_depth, all_videos.clone());
+
     for run_index in 1..=run_times {
         let desired_count = if random_count_min == random_count_max {
             random_count_min
@@ -504,12 +606,9 @@ pub async fn concat_videos_with_reencode(
         };
 
         let actual_count = desired_count.min(available_count);
-        let mut videos = all_videos.clone();
-        {
-            let mut rng = rand::thread_rng();
-            videos.shuffle(&mut rng);
-        }
-        videos.truncate(actual_count);
+
+        // 从池子中抽取视频（不放回）
+        let mut videos = pool_manager.draw_videos(&input_dir, max_depth, actual_count)?;
 
         if desired_count > available_count {
             window
@@ -522,11 +621,16 @@ pub async fn concat_videos_with_reencode(
                 )
                 .map_err(|e| format!("发送进度事件失败: {}", e))?;
         } else {
-            window
-                .emit(
-                    "progress",
-                    format!("第 {}/{} 次：已选择 {} 个视频", run_index, run_times, videos.len()),
-                )
+            // 检查是否触发了池子重填
+            let remaining = pool_manager.get_remaining_count(&input_dir, max_depth);
+
+            let msg = if remaining + videos.len() == available_count {
+                format!("第 {}/{} 次：池子已抽完，重新填充。本次选择 {} 个视频", run_index, run_times, videos.len())
+            } else {
+                format!("第 {}/{} 次：已选择 {} 个视频（池子剩余 {}）", run_index, run_times, videos.len(), remaining)
+            };
+
+            window.emit("progress", msg)
                 .map_err(|e| format!("发送进度事件失败: {}", e))?;
         }
 

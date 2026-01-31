@@ -570,6 +570,8 @@ pub async fn auto_split_video(
     algorithm: String,
     threshold: f64,
     min_duration: f64,
+    skip_first: bool,   // 新增：掐头
+    skip_last: bool,    // 新增：去尾
 ) -> Result<String, String> {
     let window = app
         .get_webview_window("main")
@@ -687,6 +689,34 @@ pub async fn auto_split_video(
     if segments.is_empty() {
         return Err("未检测到场景切换，无法拆分".to_string());
     }
+
+    // 新增：根据掐头去尾选项过滤片段
+    let original_count = segments.len();
+    if skip_first && segments.len() > 1 {
+        segments.remove(0);
+    }
+    if skip_last && segments.len() > 1 {
+        segments.pop();
+    }
+
+    if segments.is_empty() {
+        return Err(format!(
+            "过滤后无片段可输出（原始片段数: {}，掐头: {}，去尾: {}）",
+            original_count, skip_first, skip_last
+        ));
+    }
+
+    // 发送过滤信息
+    let _ = window.emit(
+        "auto_split_progress",
+        serde_json::json!({
+            "message": format!(
+                "识别到 {} 个片段，过滤后输出 {} 个",
+                original_count, segments.len()
+            ),
+            "percent": 70,
+        }),
+    );
 
     // 生成视频片段
     let _ = window.emit(
