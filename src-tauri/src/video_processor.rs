@@ -346,11 +346,7 @@ pub async fn concat_videos(
                 "-b:a",
                 "192k",
                 "-af",
-                "aresample=async=1:first_pts=0",
-                "-fflags",
-                "+genpts",
-                "-avoid_negative_ts",
-                "make_zero",
+                "aresample=async=1000",
                 output_path.to_str().unwrap(),
             ])
             .output()
