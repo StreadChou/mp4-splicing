@@ -341,6 +341,12 @@ pub async fn concat_videos(
                 concat_file.to_str().unwrap(),
                 "-c",
                 "copy",
+                "-fflags",
+                "+genpts",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-max_mismatch",
+                "1.0",
                 output_path.to_str().unwrap(),
             ])
             .output()
@@ -520,10 +526,20 @@ pub async fn concat_videos_with_reencode(
                 "fast",
                 "-crf",
                 "23",
+                "-vsync",
+                "cfr",
                 "-c:a",
                 "aac",
                 "-b:a",
                 "192k",
+                "-async",
+                "1",
+                "-fflags",
+                "+genpts",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-max_mismatch",
+                "1.0",
                 output_path.to_str().unwrap(),
             ])
             .output()
