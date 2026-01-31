@@ -48,6 +48,110 @@ pub struct BatchProgress {
     pub current_index: usize,
 }
 
+fn parse_rational(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "N/A" {
+        return None;
+    }
+    if let Some((num, den)) = trimmed.split_once('/') {
+        let n: f64 = num.parse().ok()?;
+        let d: f64 = den.parse().ok()?;
+        if d == 0.0 {
+            return None;
+        }
+        Some(n / d)
+    } else {
+        trimmed.parse().ok()
+    }
+}
+
+fn normalize_timestamps(mut timestamps: Vec<f64>) -> Vec<f64> {
+    let mut last = 0.0f64;
+    for ts in timestamps.iter_mut() {
+        if !ts.is_finite() || *ts < 0.0 {
+            *ts = last;
+        } else if *ts < last {
+            *ts = last;
+        }
+        last = *ts;
+    }
+    if let Some(first) = timestamps.first().copied() {
+        if first > 0.0 {
+            for ts in timestamps.iter_mut() {
+                *ts = (*ts - first).max(0.0);
+            }
+        }
+    }
+    timestamps
+}
+
+async fn probe_frame_timestamps(
+    app: &AppHandle,
+    video_path: &str,
+    field: &str,
+) -> Result<Vec<f64>, String> {
+    let sidecar = app
+        .shell()
+        .sidecar("ffprobe")
+        .map_err(|e| format!("FFprobe 启动失败: {}", e))?;
+
+    let output = sidecar
+        .args(&[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-show_entries",
+            &format!("frame={}", field),
+            "-of",
+            "csv=p=0",
+            video_path,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("FFprobe 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "FFprobe 失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut timestamps = Vec::new();
+    for line in stdout.lines() {
+        let value = line.trim();
+        if value.is_empty() || value == "N/A" {
+            continue;
+        }
+        if let Ok(ts) = value.parse::<f64>() {
+            timestamps.push(ts);
+        }
+    }
+
+    if timestamps.is_empty() {
+        return Ok(timestamps);
+    }
+
+    Ok(normalize_timestamps(timestamps))
+}
+
+async fn get_video_frame_timestamps(
+    app: &AppHandle,
+    video_path: &str,
+) -> Result<Vec<f64>, String> {
+    let candidates = ["best_effort_timestamp_time", "pkt_pts_time", "pkt_dts_time"];
+    for field in candidates {
+        let timestamps = probe_frame_timestamps(app, video_path, field).await?;
+        if !timestamps.is_empty() {
+            return Ok(timestamps);
+        }
+    }
+    Err("无法获取帧时间戳".to_string())
+}
+
 // 计算文件路径的哈希值（用于临时目录命名）
 fn calculate_hash(path: &str) -> String {
     let mut hasher = DefaultHasher::new();
@@ -80,8 +184,9 @@ async fn get_video_metadata_internal(
             "error",
             "-select_streams",
             "v:0",
+            "-count_frames",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,duration",
+            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_read_frames,nb_frames",
             "-show_entries",
             "format=duration",
             "-of",
@@ -114,28 +219,12 @@ async fn get_video_metadata_internal(
         .ok_or("无法获取编码格式")?
         .to_string();
 
-    // 解析帧率 (如 "30/1" 或 "30000/1001")
-    let r_frame_rate = stream["r_frame_rate"]
-        .as_str()
-        .ok_or("无法获取帧率")?;
-    let fps = if r_frame_rate.contains('/') {
-        let parts: Vec<&str> = r_frame_rate.split('/').collect();
-        if parts.len() == 2 {
-            let num: f64 = parts[0]
-                .parse()
-                .map_err(|_| "无法解析帧率分子")?;
-            let den: f64 = parts[1]
-                .parse()
-                .map_err(|_| "无法解析帧率分母")?;
-            num / den
-        } else {
-            return Err("帧率格式错误".to_string());
-        }
-    } else {
-        r_frame_rate
-            .parse()
-            .map_err(|_| "无法解析帧率")?
-    };
+    // 解析帧率（优先 avg_frame_rate，其次 r_frame_rate）
+    let avg_frame_rate = stream["avg_frame_rate"].as_str().unwrap_or("N/A");
+    let r_frame_rate = stream["r_frame_rate"].as_str().unwrap_or("N/A");
+    let fps = parse_rational(avg_frame_rate)
+        .or_else(|| parse_rational(r_frame_rate))
+        .unwrap_or(0.0);
 
     // 获取时长（优先从流中获取，否则从格式中获取）
     let duration = if let Some(stream_duration) = stream.get("duration") {
@@ -150,7 +239,30 @@ async fn get_video_metadata_internal(
             .ok_or("无法获取视频时长")?
     };
 
-    let total_frames = (duration * fps).round() as u32;
+    let total_frames = stream["nb_read_frames"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| {
+            stream["nb_frames"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .map(|v| v as u32)
+        .unwrap_or_else(|| {
+            if fps > 0.0 {
+                (duration * fps).round() as u32
+            } else {
+                0
+            }
+        });
+
+    let fps = if fps > 0.0 {
+        fps
+    } else if duration > 0.0 && total_frames > 0 {
+        total_frames as f64 / duration
+    } else {
+        0.0
+    };
 
     Ok(VideoMetadata {
         width,
@@ -202,11 +314,7 @@ pub async fn extract_all_frames(
         }),
     );
 
-    let vf_filter = if metadata.fps > 0.0 {
-        format!("fps={:.6},scale=320:-1", metadata.fps)
-    } else {
-        "scale=320:-1".to_string()
-    };
+    let vf_filter = "scale=320:-1".to_string();
 
     let output = sidecar
         .args(&[
@@ -241,11 +349,16 @@ pub async fn extract_all_frames(
 
     entries.sort_by_key(|e| e.path());
 
-    for (idx, entry) in entries.iter().enumerate() {
+    let frame_timestamps = get_video_frame_timestamps(&app, &video_path).await?;
+    let limit = std::cmp::min(entries.len(), frame_timestamps.len());
+    for (idx, entry) in entries.iter().take(limit).enumerate() {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("jpg") {
             let frame_number = idx as u32;
-            let timestamp = frame_number as f64 / metadata.fps;
+            let timestamp = frame_timestamps
+                .get(idx)
+                .copied()
+                .unwrap_or_else(|| frame_number as f64 / metadata.fps.max(1.0));
 
             frames.push(FrameInfo {
                 frame_number,
@@ -254,12 +367,12 @@ pub async fn extract_all_frames(
             });
 
             // 发送进度
-            if idx % 30 == 0 || idx == entries.len() - 1 {
+            if idx % 30 == 0 || idx == limit.saturating_sub(1) {
                 let _ = window.emit(
                     "frame_progress",
                     serde_json::json!({
-                        "message": format!("已提取 {}/{} 帧", idx + 1, entries.len()),
-                        "percent": ((idx + 1) as f64 / entries.len() as f64 * 100.0) as u32,
+                        "message": format!("已提取 {}/{} 帧", idx + 1, limit),
+                        "percent": ((idx + 1) as f64 / limit as f64 * 100.0) as u32,
                     }),
                 );
             }
@@ -292,15 +405,27 @@ pub async fn generate_video_segments(
     let output_base_dir = PathBuf::from(&output_dir).join(&*video_name);
     fs::create_dir_all(&output_base_dir).map_err(|e| format!("创建输出目录失败: {}", e))?;
 
+    let frame_timestamps = get_video_frame_timestamps(&app, &video_path).await?;
+    let total_frames = frame_timestamps.len();
+
     // 逐个生成片段
     for (idx, segment) in segments.iter().enumerate() {
         let segment_num = idx + 1;
         let output_file = output_base_dir.join(format!("{}_{}.mp4", video_name, segment_num));
 
-        // 计算时间戳（按帧号精确转换，包含结束帧）
-        let start_time = segment.start_frame as f64 / metadata.fps;
-        let duration =
-            (segment.end_frame.saturating_sub(segment.start_frame) + 1) as f64 / metadata.fps;
+        let start_idx = segment.start_frame as usize;
+        let end_idx = segment.end_frame as usize;
+        if start_idx >= total_frames || end_idx >= total_frames || start_idx > end_idx {
+            return Err(format!("片段 {} 的帧范围无效", segment_num));
+        }
+
+        let start_time = frame_timestamps[start_idx];
+        let end_time_exclusive = if end_idx + 1 < total_frames {
+            frame_timestamps[end_idx + 1]
+        } else {
+            metadata.duration.max(frame_timestamps[end_idx])
+        };
+        let duration = (end_time_exclusive - start_time).max(0.0);
 
         // 发送进度
         let _ = window.emit(
@@ -327,22 +452,22 @@ pub async fn generate_video_segments(
                 &start_time.to_string(),
                 "-t",
                 &duration.to_string(),
+                "-vf",
+                "setpts=PTS-STARTPTS",
+                "-vsync",
+                "vfr",
                 "-c:v",
                 "libx264",
                 "-preset",
                 "fast",
                 "-crf",
                 "18",
-                "-r",
-                &metadata.fps.to_string(),
-                "-vsync",
-                "cfr",
                 "-c:a",
                 "aac",
                 "-b:a",
                 "192k",
                 "-af",
-                "aresample=async=1",
+                "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
                 "-fflags",
                 "+genpts",
                 "-avoid_negative_ts",
@@ -611,11 +736,7 @@ async fn extract_all_frames_internal(
         .sidecar("ffmpeg")
         .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
 
-    let vf_filter = if metadata.fps > 0.0 {
-        format!("fps={:.6},scale=320:-1", metadata.fps)
-    } else {
-        "scale=320:-1".to_string()
-    };
+    let vf_filter = "scale=320:-1".to_string();
 
     let output = sidecar
         .args(&[
@@ -650,11 +771,16 @@ async fn extract_all_frames_internal(
 
     entries.sort_by_key(|e| e.path());
 
-    for (idx, entry) in entries.iter().enumerate() {
+    let frame_timestamps = get_video_frame_timestamps(app, video_path).await?;
+    let limit = std::cmp::min(entries.len(), frame_timestamps.len());
+    for (idx, entry) in entries.iter().take(limit).enumerate() {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("jpg") {
             let frame_number = idx as u32;
-            let timestamp = frame_number as f64 / metadata.fps;
+            let timestamp = frame_timestamps
+                .get(idx)
+                .copied()
+                .unwrap_or_else(|| frame_number as f64 / metadata.fps.max(1.0));
 
             frames.push(FrameInfo {
                 frame_number,
@@ -666,4 +792,3 @@ async fn extract_all_frames_internal(
 
     Ok(frames)
 }
-

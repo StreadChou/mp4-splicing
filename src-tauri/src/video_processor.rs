@@ -1,8 +1,6 @@
 use rand::seq::SliceRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
@@ -14,6 +12,8 @@ pub struct VideoInfo {
     pub width: u32,
     pub height: u32,
     pub fps: String,
+    pub duration: f64,
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,10 +67,10 @@ async fn get_video_info(app: &AppHandle, video_path: &Path) -> Result<VideoInfo,
         .args(&[
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate",
+            "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate",
+            "-show_entries",
+            "format=duration",
             "-of",
             "json",
             video_path.to_str().unwrap(),
@@ -90,22 +90,60 @@ async fn get_video_info(app: &AppHandle, video_path: &Path) -> Result<VideoInfo,
     let json: serde_json::Value =
         serde_json::from_str(&json_str).map_err(|e| format!("解析 FFprobe 输出失败: {}", e))?;
 
-    let stream = json["streams"]
+    let streams = json["streams"]
         .as_array()
-        .and_then(|arr| arr.first())
-        .ok_or("未找到视频流信息")?;
+        .ok_or("未找到流信息")?;
+
+    let mut video_stream = None;
+    let mut audio_stream = None;
+    for stream in streams {
+        let codec_type = stream["codec_type"].as_str().unwrap_or("");
+        if codec_type == "video" && video_stream.is_none() {
+            video_stream = Some(stream);
+        } else if codec_type == "audio" && audio_stream.is_none() {
+            audio_stream = Some(stream);
+        }
+    }
+
+    let stream = video_stream.ok_or("未找到视频流信息")?;
+    let width = stream["width"]
+        .as_u64()
+        .ok_or("无法获取宽度")? as u32;
+    let height = stream["height"]
+        .as_u64()
+        .ok_or("无法获取高度")? as u32;
+    let codec = stream["codec_name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let avg_frame_rate = stream["avg_frame_rate"]
+        .as_str()
+        .unwrap_or("N/A");
+    let r_frame_rate = stream["r_frame_rate"]
+        .as_str()
+        .unwrap_or("N/A");
+    let fps = if avg_frame_rate != "N/A" && !avg_frame_rate.is_empty() {
+        avg_frame_rate.to_string()
+    } else {
+        r_frame_rate.to_string()
+    };
+    let duration = json["format"]["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| {
+            stream["duration"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+        })
+        .unwrap_or(0.0);
 
     Ok(VideoInfo {
-        codec: stream["codec_name"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string(),
-        width: stream["width"].as_u64().unwrap_or(0) as u32,
-        height: stream["height"].as_u64().unwrap_or(0) as u32,
-        fps: stream["r_frame_rate"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string(),
+        codec,
+        width,
+        height,
+        fps,
+        duration,
+        has_audio: audio_stream.is_some(),
     })
 }
 
@@ -132,36 +170,22 @@ async fn check_video_compatibility(
         });
     }
 
-    let first = &videos_info[0].1;
     let mut compatible = true;
     let mut issues = Vec::new();
 
-    for (name, info) in &videos_info[1..] {
-        if info.codec != first.codec {
+    for (name, info) in &videos_info {
+        if info.width == 0 || info.height == 0 {
             compatible = false;
-            issues.push(format!(
-                "{}: 编码格式不同 ({} vs {})",
-                name, info.codec, first.codec
-            ));
+            issues.push(format!("{}: 无法解析分辨率", name));
         }
-        if info.width != first.width || info.height != first.height {
+        if info.duration <= 0.0 {
             compatible = false;
-            issues.push(format!(
-                "{}: 分辨率不同 ({}x{} vs {}x{})",
-                name, info.width, info.height, first.width, first.height
-            ));
-        }
-        if info.fps != first.fps {
-            compatible = false;
-            issues.push(format!(
-                "{}: 帧率不同 ({} vs {})",
-                name, info.fps, first.fps
-            ));
+            issues.push(format!("{}: 无法解析时长", name));
         }
     }
 
     let message = if compatible {
-        "所有视频格式兼容，可以直接拼接".to_string()
+        "视频信息解析完成，将统一重编码以保证音画同步".to_string()
     } else {
         format!("检测到兼容性问题:\n{}", issues.join("\n"))
     };
@@ -173,21 +197,47 @@ async fn check_video_compatibility(
     })
 }
 
-/// 创建 FFmpeg concat 格式的文件列表
-fn create_concat_file(videos: &[PathBuf], temp_dir: &Path) -> Result<PathBuf, String> {
-    let concat_file = temp_dir.join("concat_list.txt");
-    let mut file =
-        File::create(&concat_file).map_err(|e| format!("创建 concat 文件失败: {}", e))?;
+fn build_concat_filter(
+    videos_info: &[(String, VideoInfo)],
+    target_width: u32,
+    target_height: u32,
+) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for (idx, (_, info)) in videos_info.iter().enumerate() {
+        parts.push(format!(
+            "[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,setpts=PTS-STARTPTS[v{idx}]",
+            w = target_width,
+            h = target_height
+        ));
 
-    for video in videos {
-        let abs_path = video
-            .canonicalize()
-            .map_err(|e| format!("获取绝对路径失败: {}", e))?;
-        writeln!(file, "file '{}'", abs_path.display())
-            .map_err(|e| format!("写入 concat 文件失败: {}", e))?;
+        if info.has_audio {
+            parts.push(format!(
+                "[{idx}:a]aresample=async=1:first_pts=0,aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{idx}]"
+            ));
+        } else {
+            let duration = if info.duration > 0.0 {
+                info.duration
+            } else {
+                return Err(format!("无法获取第 {} 个视频时长，无法补齐静音音轨", idx + 1));
+            };
+            parts.push(format!(
+                "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={:.6},asetpts=PTS-STARTPTS[a{idx}]",
+                duration
+            ));
+        }
     }
 
-    Ok(concat_file)
+    let mut concat_inputs = String::new();
+    for idx in 0..videos_info.len() {
+        concat_inputs.push_str(&format!("[v{idx}][a{idx}]"));
+    }
+    parts.push(format!(
+        "{}concat=n={}:v=1:a=1[outv][outa]",
+        concat_inputs,
+        videos_info.len()
+    ));
+
+    Ok(parts.join(";"))
 }
 
 /// 主命令：拼接视频（快速模式，使用 -c copy）
@@ -298,17 +348,10 @@ pub async fn concat_videos(
         if !compatibility.compatible {
             return Err(format!(
                 "INCOMPATIBLE_VIDEOS:第 {} 次生成：\n{}",
-                run_index, compatibility.message
+                run_index,
+                compatibility.message.clone()
             ));
         }
-
-        // 创建临时目录
-        let temp_dir = std::env::temp_dir()
-            .join(format!("mp4handler_{}_{}", base_timestamp, run_index));
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-        // 创建 concat 文件
-        let concat_file = create_concat_file(&videos, &temp_dir)?;
 
         // 生成输出文件名
         let output_file_name = if run_times == 1 {
@@ -318,11 +361,19 @@ pub async fn concat_videos(
         };
         let output_path = PathBuf::from(&output_dir).join(output_file_name);
 
-        // 调用 FFmpeg 拼接（快速模式）
+        let (target_width, target_height) = compatibility
+            .videos_info
+            .first()
+            .map(|(_, info)| (info.width, info.height))
+            .ok_or("无法获取目标分辨率")?;
+
+        let filter = build_concat_filter(&compatibility.videos_info, target_width, target_height)?;
+
+        // 调用 FFmpeg 拼接（统一重编码）
         window
             .emit(
                 "progress",
-                format!("第 {}/{} 次：正在拼接视频（快速模式）...", run_index, run_times),
+                format!("第 {}/{} 次：正在拼接视频（统一重编码以保证同步）...", run_index, run_times),
             )
             .map_err(|e| format!("发送进度事件失败: {}", e))?;
 
@@ -331,30 +382,43 @@ pub async fn concat_videos(
             .sidecar("ffmpeg")
             .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
 
+        let mut args: Vec<String> = Vec::new();
+        for video in &videos {
+            args.push("-i".to_string());
+            args.push(video.to_string_lossy().to_string());
+        }
+        args.push("-filter_complex".to_string());
+        args.push(filter);
+        args.push("-map".to_string());
+        args.push("[outv]".to_string());
+        args.push("-map".to_string());
+        args.push("[outa]".to_string());
+        args.push("-vsync".to_string());
+        args.push("vfr".to_string());
+        args.push("-c:v".to_string());
+        args.push("libx264".to_string());
+        args.push("-preset".to_string());
+        args.push("fast".to_string());
+        args.push("-crf".to_string());
+        args.push("23".to_string());
+        args.push("-pix_fmt".to_string());
+        args.push("yuv420p".to_string());
+        args.push("-c:a".to_string());
+        args.push("aac".to_string());
+        args.push("-b:a".to_string());
+        args.push("192k".to_string());
+        args.push("-fflags".to_string());
+        args.push("+genpts".to_string());
+        args.push("-avoid_negative_ts".to_string());
+        args.push("make_zero".to_string());
+        args.push("-shortest".to_string());
+        args.push(output_path.to_string_lossy().to_string());
+
         let output = sidecar
-            .args(&[
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                concat_file.to_str().unwrap(),
-                "-c:v",
-                "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-af",
-                "aresample=async=1000",
-                output_path.to_str().unwrap(),
-            ])
+            .args(args)
             .output()
             .await
             .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
-
-        // 清理临时文件
-        let _ = fs::remove_dir_all(&temp_dir);
 
         if !output.status.success() {
             return Err(format!(
@@ -480,14 +544,6 @@ pub async fn concat_videos_with_reencode(
             }
         }
 
-        // 创建临时目录
-        let temp_dir = std::env::temp_dir()
-            .join(format!("mp4handler_{}_{}", base_timestamp, run_index));
-        fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-        // 创建 concat 文件
-        let concat_file = create_concat_file(&videos, &temp_dir)?;
-
         // 生成输出文件名
         let output_file_name = if run_times == 1 {
             format!("output_{}.mp4", base_timestamp)
@@ -496,12 +552,30 @@ pub async fn concat_videos_with_reencode(
         };
         let output_path = PathBuf::from(&output_dir).join(output_file_name);
 
-        // 调用 FFmpeg 拼接（重新编码模式）
+        let compatibility = check_video_compatibility(&app, &videos).await?;
+
+        if !compatibility.compatible {
+            return Err(format!(
+                "INCOMPATIBLE_VIDEOS:第 {} 次生成：\n{}",
+                run_index,
+                compatibility.message.clone()
+            ));
+        }
+
+        let (target_width, target_height) = compatibility
+            .videos_info
+            .first()
+            .map(|(_, info)| (info.width, info.height))
+            .ok_or("无法获取目标分辨率")?;
+
+        let filter = build_concat_filter(&compatibility.videos_info, target_width, target_height)?;
+
+        // 调用 FFmpeg 拼接（统一重编码）
         window
             .emit(
                 "progress",
                 format!(
-                    "第 {}/{} 次：正在拼接视频（重新编码模式，这可能需要较长时间）...",
+                    "第 {}/{} 次：正在拼接视频（统一重编码以保证同步）...",
                     run_index, run_times
                 ),
             )
@@ -512,40 +586,43 @@ pub async fn concat_videos_with_reencode(
             .sidecar("ffmpeg")
             .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
 
+        let mut args: Vec<String> = Vec::new();
+        for video in &videos {
+            args.push("-i".to_string());
+            args.push(video.to_string_lossy().to_string());
+        }
+        args.push("-filter_complex".to_string());
+        args.push(filter);
+        args.push("-map".to_string());
+        args.push("[outv]".to_string());
+        args.push("-map".to_string());
+        args.push("[outa]".to_string());
+        args.push("-vsync".to_string());
+        args.push("vfr".to_string());
+        args.push("-c:v".to_string());
+        args.push("libx264".to_string());
+        args.push("-preset".to_string());
+        args.push("fast".to_string());
+        args.push("-crf".to_string());
+        args.push("23".to_string());
+        args.push("-pix_fmt".to_string());
+        args.push("yuv420p".to_string());
+        args.push("-c:a".to_string());
+        args.push("aac".to_string());
+        args.push("-b:a".to_string());
+        args.push("192k".to_string());
+        args.push("-fflags".to_string());
+        args.push("+genpts".to_string());
+        args.push("-avoid_negative_ts".to_string());
+        args.push("make_zero".to_string());
+        args.push("-shortest".to_string());
+        args.push(output_path.to_string_lossy().to_string());
+
         let output = sidecar
-            .args(&[
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                concat_file.to_str().unwrap(),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-vsync",
-                "cfr",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-af",
-                "aresample=async=1",
-                "-fflags",
-                "+genpts",
-                "-avoid_negative_ts",
-                "make_zero",
-                output_path.to_str().unwrap(),
-            ])
+            .args(args)
             .output()
             .await
             .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
-
-        // 清理临时文件
-        let _ = fs::remove_dir_all(&temp_dir);
 
         if !output.status.success() {
             return Err(format!(
