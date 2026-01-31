@@ -345,8 +345,6 @@ pub async fn concat_videos(
                 "+genpts",
                 "-avoid_negative_ts",
                 "make_zero",
-                "-max_mismatch",
-                "1.0",
                 output_path.to_str().unwrap(),
             ])
             .output()
@@ -532,14 +530,12 @@ pub async fn concat_videos_with_reencode(
                 "aac",
                 "-b:a",
                 "192k",
-                "-async",
-                "1",
+                "-af",
+                "aresample=async=1",
                 "-fflags",
                 "+genpts",
                 "-avoid_negative_ts",
                 "make_zero",
-                "-max_mismatch",
-                "1.0",
                 output_path.to_str().unwrap(),
             ])
             .output()
