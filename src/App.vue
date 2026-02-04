@@ -83,6 +83,20 @@
         <q-item
           clickable
           v-ripple
+          :active="activeTab === 'remove-ending'"
+          @click="activeTab = 'remove-ending'"
+          active-class="bg-primary text-white"
+          class="rounded-borders q-mb-xs"
+        >
+          <q-item-section avatar>
+            <q-icon name="cut" />
+          </q-item-section>
+          <q-item-section>去结尾</q-item-section>
+        </q-item>
+
+        <q-item
+          clickable
+          v-ripple
           :active="activeTab === 'batch-download'"
           @click="activeTab = 'batch-download'"
           active-class="bg-primary text-white"
@@ -104,6 +118,7 @@
           <SingleSplit v-show="activeTab === 'split'" />
           <BatchSplit v-show="activeTab === 'batch-split'" />
           <AutoSplit v-show="activeTab === 'auto-split'" />
+          <RemoveEnding v-show="activeTab === 'remove-ending'" />
           <BatchDownload v-show="activeTab === 'batch-download'" />
         </div>
       </q-page>
@@ -117,8 +132,9 @@ import VideoConcat from "./components/VideoConcat.vue";
 import SingleSplit from "./components/SingleSplit.vue";
 import BatchSplit from "./components/BatchSplit.vue";
 import AutoSplit from "./components/AutoSplit.vue";
+import RemoveEnding from "./components/RemoveEnding.vue";
 import BatchDownload from "./components/BatchDownload.vue";
 
-const activeTab = ref<'concat' | 'split' | 'batch-split' | 'auto-split' | 'batch-download'>('concat');
+const activeTab = ref<'concat' | 'split' | 'batch-split' | 'auto-split' | 'remove-ending' | 'batch-download'>('concat');
 </script>
 

@@ -30,6 +30,7 @@ pub fn run() {
             video_frame_extractor::save_batch_progress,
             video_frame_extractor::delete_video_file,
             video_frame_extractor::auto_split_video,
+            video_frame_extractor::remove_ending_and_concat,
             downloader::batch_download,
         ])
         .run(tauri::generate_context!())

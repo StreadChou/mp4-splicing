@@ -289,7 +289,35 @@ async fn check_video_compatibility(
     })
 }
 
-fn build_concat_filter(
+/// 检测给定路径列表的视频兼容性（供外部模块使用）
+pub async fn check_video_compatibility_for_paths(
+    app: &AppHandle,
+    paths: &[PathBuf],
+) -> Result<Vec<(String, VideoInfo)>, String> {
+    let mut videos_info = Vec::new();
+
+    for video in paths {
+        let info = get_video_info(app, video).await?;
+        videos_info.push((
+            video.file_name().unwrap().to_string_lossy().to_string(),
+            info,
+        ));
+    }
+
+    // 检查兼容性
+    for (name, info) in &videos_info {
+        if info.width == 0 || info.height == 0 {
+            return Err(format!("{}: 无法解析分辨率", name));
+        }
+        if info.duration <= 0.0 {
+            return Err(format!("{}: 无法解析时长", name));
+        }
+    }
+
+    Ok(videos_info)
+}
+
+pub fn build_concat_filter(
     videos_info: &[(String, VideoInfo)],
     target_width: u32,
     target_height: u32,

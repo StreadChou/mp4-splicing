@@ -8,7 +8,9 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 use rayon::prelude::*;
+use rand::seq::SliceRandom;
 use crate::frame_similarity::{calculate_similarity, SimilarityAlgorithm};
+use crate::video_processor::{check_video_compatibility_for_paths, build_concat_filter};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VideoMetadata {
@@ -821,4 +823,376 @@ async fn extract_all_frames_internal(
     }
 
     Ok(frames)
+}
+
+// 去结尾并合成视频
+#[tauri::command]
+pub async fn remove_ending_and_concat(
+    app: AppHandle,
+    video_path: String,
+    output_dir: String,
+    algorithm: String,
+    threshold: f64,
+    min_duration: f64,
+    new_ending_video: Option<String>,
+    shuffle_segments: bool,
+) -> Result<String, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("无法获取窗口")?;
+
+    // 解析算法
+    let algo = SimilarityAlgorithm::from_str(&algorithm)?;
+
+    // 获取视频元数据
+    let metadata = get_video_metadata_internal(&app, &video_path).await?;
+
+    // 提取所有帧
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "正在提取视频帧...",
+            "percent": 0,
+        }),
+    );
+
+    let frames = extract_all_frames_internal(&app, &video_path).await?;
+
+    if frames.len() < 2 {
+        return Err("视频帧数不足".to_string());
+    }
+
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "帧提取完成",
+            "percent": 10,
+        }),
+    );
+
+    // 计算最小帧数
+    let min_frames = (min_duration * metadata.fps).round() as u32;
+
+    // 并行计算相似度
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "正在分析帧相似度...",
+            "percent": 10,
+        }),
+    );
+
+    let mut split_points = vec![0u32];
+    let mut last_split_frame = 0u32;
+
+    let progress_counter = Arc::new(AtomicUsize::new(0));
+    let total_frames = frames.len();
+    let window_clone = window.clone();
+
+    let similarities: Vec<(usize, f64)> = (1..frames.len())
+        .into_par_iter()
+        .map(|i| {
+            let prev_frame = &frames[i - 1];
+            let curr_frame = &frames[i];
+
+            let similarity = calculate_similarity(
+                &prev_frame.image_path,
+                &curr_frame.image_path,
+                algo,
+            ).unwrap_or(1.0);
+
+            let current = progress_counter.fetch_add(1, Ordering::Relaxed);
+
+            if current % 100 == 0 {
+                let percent = 10 + ((current as f64 / total_frames as f64) * 50.0) as u32;
+                let _ = window_clone.emit(
+                    "remove_ending_progress",
+                    serde_json::json!({
+                        "message": format!("已分析 {}/{} 帧", current, total_frames),
+                        "percent": percent,
+                    }),
+                );
+            }
+
+            (i, similarity)
+        })
+        .collect();
+
+    // 串行处理切分点
+    for (i, similarity) in similarities {
+        let curr_frame = &frames[i];
+
+        if similarity < threshold {
+            let frames_since_last_split = curr_frame.frame_number - last_split_frame;
+            if frames_since_last_split >= min_frames {
+                split_points.push(curr_frame.frame_number);
+                last_split_frame = curr_frame.frame_number;
+            }
+        }
+    }
+
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": format!("已分析 {}/{} 帧", total_frames, total_frames),
+            "percent": 60,
+        }),
+    );
+
+    // 添加结束帧
+    if split_points.last() != Some(&(frames.len() as u32 - 1)) {
+        split_points.push(frames.len() as u32 - 1);
+    }
+
+    // 生成片段范围
+    let mut segments = Vec::new();
+    for i in 0..split_points.len() - 1 {
+        segments.push(SegmentRange {
+            start_frame: split_points[i],
+            end_frame: split_points[i + 1] - 1,
+        });
+    }
+
+    let original_count = segments.len();
+
+    // 移除最后一个片段
+    if segments.is_empty() {
+        return Err("未检测到场景切换（相似度始终高于阈值）".to_string());
+    }
+
+    segments.pop();
+
+    if segments.is_empty() {
+        return Err(format!(
+            "检测到 {} 个片段，移除最后一个后无剩余片段，跳过该视频",
+            original_count
+        ));
+    }
+
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": format!("识别到 {} 个片段，移除最后一个后剩余 {} 个", original_count, segments.len()),
+            "percent": 60,
+        }),
+    );
+
+    // 如果需要随机打乱
+    if shuffle_segments {
+        let mut rng = rand::thread_rng();
+        segments.shuffle(&mut rng);
+    }
+
+    // 生成临时片段文件
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "正在生成临时片段...",
+            "percent": 60,
+        }),
+    );
+
+    let video_hash = calculate_hash(&video_path);
+    let temp_dir = std::env::temp_dir()
+        .join(format!("mp4handler_{}", video_hash))
+        .join("segments");
+
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir).map_err(|e| format!("清理临时目录失败: {}", e))?;
+    }
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    let frame_timestamps = get_video_frame_timestamps(&app, &video_path).await?;
+    let total_frames_count = frame_timestamps.len();
+
+    let mut temp_segment_paths = Vec::new();
+
+    for (idx, segment) in segments.iter().enumerate() {
+        let segment_num = idx + 1;
+        let temp_file = temp_dir.join(format!("segment_{}.mp4", segment_num));
+
+        let start_idx = segment.start_frame as usize;
+        let end_idx = segment.end_frame as usize;
+        if start_idx >= total_frames_count || end_idx >= total_frames_count || start_idx > end_idx {
+            return Err(format!("片段 {} 的帧范围无效", segment_num));
+        }
+
+        let start_time = frame_timestamps[start_idx];
+        let end_time_exclusive = if end_idx + 1 < total_frames_count {
+            frame_timestamps[end_idx + 1]
+        } else {
+            metadata.duration.max(frame_timestamps[end_idx])
+        };
+        let duration = (end_time_exclusive - start_time).max(0.0);
+
+        let percent = 60 + ((segment_num as f64 / segments.len() as f64) * 20.0) as u32;
+        let _ = window.emit(
+            "remove_ending_progress",
+            serde_json::json!({
+                "message": format!("正在生成临时片段 {}/{}", segment_num, segments.len()),
+                "percent": percent,
+            }),
+        );
+
+        let sidecar = app
+            .shell()
+            .sidecar("ffmpeg")
+            .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
+
+        let output = sidecar
+            .args(&[
+                "-i",
+                &video_path,
+                "-ss",
+                &start_time.to_string(),
+                "-t",
+                &duration.to_string(),
+                "-vf",
+                "setpts=PTS-STARTPTS",
+                "-vsync",
+                "vfr",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-af",
+                "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
+                "-fflags",
+                "+genpts",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-y",
+                temp_file.to_str().unwrap(),
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "生成临时片段 {} 失败: {}",
+                segment_num,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        temp_segment_paths.push(temp_file);
+    }
+
+    // 如果有新结尾视频，添加到列表
+    if let Some(ending) = new_ending_video {
+        if !ending.is_empty() {
+            let ending_path = PathBuf::from(&ending);
+            if !ending_path.exists() {
+                return Err(format!("新结尾视频不存在: {}", ending));
+            }
+            temp_segment_paths.push(ending_path);
+        }
+    }
+
+    // 检测视频兼容性
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "正在检测视频兼容性...",
+            "percent": 80,
+        }),
+    );
+
+    let videos_info = check_video_compatibility_for_paths(&app, &temp_segment_paths).await?;
+
+    let (target_width, target_height) = videos_info
+        .first()
+        .map(|(_, info)| (info.width, info.height))
+        .ok_or("无法获取目标分辨率")?;
+
+    let filter = build_concat_filter(&videos_info, target_width, target_height)?;
+
+    // 生成输出文件名
+    let video_name = Path::new(&video_path)
+        .file_stem()
+        .ok_or("无法获取视频文件名")?
+        .to_string_lossy();
+    let output_path = PathBuf::from(&output_dir).join(format!("{}_processed.mp4", video_name));
+
+    // 合成视频
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "正在合成视频...",
+            "percent": 80,
+        }),
+    );
+
+    let sidecar = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("FFmpeg 启动失败: {}", e))?;
+
+    let mut args: Vec<String> = Vec::new();
+    for video in &temp_segment_paths {
+        args.push("-i".to_string());
+        args.push(video.to_string_lossy().to_string());
+    }
+    args.push("-filter_complex".to_string());
+    args.push(filter);
+    args.push("-map".to_string());
+    args.push("[outv]".to_string());
+    args.push("-map".to_string());
+    args.push("[outa]".to_string());
+    args.push("-vsync".to_string());
+    args.push("vfr".to_string());
+    args.push("-c:v".to_string());
+    args.push("libx264".to_string());
+    args.push("-preset".to_string());
+    args.push("fast".to_string());
+    args.push("-crf".to_string());
+    args.push("23".to_string());
+    args.push("-pix_fmt".to_string());
+    args.push("yuv420p".to_string());
+    args.push("-c:a".to_string());
+    args.push("aac".to_string());
+    args.push("-b:a".to_string());
+    args.push("192k".to_string());
+    args.push("-fflags".to_string());
+    args.push("+genpts".to_string());
+    args.push("-avoid_negative_ts".to_string());
+    args.push("make_zero".to_string());
+    args.push("-shortest".to_string());
+    args.push(output_path.to_string_lossy().to_string());
+
+    let output = sidecar
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("FFmpeg 执行失败: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "FFmpeg 执行失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    // 清理临时文件
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    let _ = window.emit(
+        "remove_ending_progress",
+        serde_json::json!({
+            "message": "完成",
+            "percent": 100,
+        }),
+    );
+
+    Ok(format!(
+        "成功处理视频，输出文件: {}",
+        output_path.display()
+    ))
 }
