@@ -444,7 +444,7 @@ async function processCurrentTask() {
     task.metadata = videoMetadata.value;
 
     // 调用去结尾命令
-    const result = await invoke<string>("remove_ending_and_concat", {
+    await invoke<string>("remove_ending_and_concat", {
       videoPath: task.path,
       outputDir: batchOutputDir.value,
       algorithm: algorithm.value,
