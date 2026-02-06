@@ -455,7 +455,6 @@ async function processCurrentTask() {
     });
 
     task.status = "completed";
-    alert(result);
 
     // 自动处理下一个
     currentTaskIndex.value++;
