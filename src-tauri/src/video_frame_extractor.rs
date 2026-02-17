@@ -1191,8 +1191,5 @@ pub async fn remove_ending_and_concat(
         }),
     );
 
-    Ok(format!(
-        "成功处理视频，输出文件: {}",
-        output_path.display()
-    ))
+    Ok(String::new())
 }
