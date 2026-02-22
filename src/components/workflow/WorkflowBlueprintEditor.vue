@@ -50,6 +50,7 @@
           class="workflow-flow"
           :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
+          :connection-line-type="ConnectionLineType.Bezier"
           :snap-to-grid="true"
           :snap-grid="[20, 20]"
           :nodes-draggable="!readonly"
@@ -134,7 +135,7 @@
 
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { VueFlow, type Connection, type Edge, type Node } from "@vue-flow/core";
+import { ConnectionLineType, VueFlow, type Connection, type Edge, type Node } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
@@ -278,7 +279,7 @@ function isPortValueTypeCompatible(sourceType: string, targetType: string): bool
 }
 
 const defaultEdgeOptions = {
-  type: "smoothstep",
+  type: "default",
   animated: false,
   style: {
     stroke: "#f59e0b",
@@ -367,8 +368,8 @@ function defaultConfigByNodeType(type: string): Record<string, unknown> {
 
 function defaultPosition(index: number): { x: number; y: number } {
   return {
-    x: 80 + (index % 4) * 290,
-    y: 90 + Math.floor(index / 4) * 180,
+    x: 80 + (index % 3) * 420,
+    y: 90 + Math.floor(index / 3) * 260,
   };
 }
 
@@ -560,6 +561,7 @@ function syncFromModel(graph: WorkflowGraph) {
   flowNodes.value = (graph.nodes || []).map((node, idx) => graphNodeToFlowNode(node, idx));
   flowEdges.value = (graph.edges || []).map((edge) => ({
     id: edge.id,
+    type: "default",
     source: edge.source,
     target: edge.target,
     sourceHandle: edge.sourceHandle,
@@ -619,6 +621,7 @@ function onConnect(connection: Connection) {
     ...flowEdges.value,
     {
       id: edgeId,
+      type: "default",
       source: connection.source,
       target: connection.target,
       sourceHandle: connection.sourceHandle,

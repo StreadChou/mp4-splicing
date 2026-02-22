@@ -18,7 +18,12 @@ export interface GraphExecutorDeps {
   readTaskRuntime(taskId: string): Promise<TaskRuntimeSnapshot>;
   writeTaskRuntime(taskId: string, runtime: TaskRuntimeSnapshot): Promise<void>;
   updateTask(taskId: string, patch: Partial<WorkflowTaskRecord>): WorkflowTaskRecord;
-  appendTaskLog(taskId: string, message: string, level?: "info" | "error" | "warn"): Promise<void>;
+  appendTaskLog(
+    taskId: string,
+    message: string,
+    level?: "info" | "error" | "warn",
+    meta?: { nodeId?: string; nodeLabel?: string },
+  ): Promise<void>;
   setWaitingInteraction(taskId: string, interaction: InteractionRequest): Promise<void>;
   clearWaitingInteraction(taskId: string): Promise<void>;
   createTaskSender(taskId: string): WebContents;
@@ -242,7 +247,10 @@ export async function executeWorkflowGraph(
     runtime.interaction = null;
     await deps.writeTaskRuntime(task.id, runtime);
     await deps.clearWaitingInteraction(task.id);
-    await deps.appendTaskLog(task.id, `已恢复人工节点: ${pendingNode.label}`);
+    await deps.appendTaskLog(task.id, "已恢复人工输入，继续执行", "info", {
+      nodeId: pendingNode.id,
+      nodeLabel: pendingNode.label,
+    });
   }
 
   while (executedSet.size < graph.nodes.length) {
@@ -259,10 +267,21 @@ export async function executeWorkflowGraph(
     }
 
     deps.updateTask(task.id, { currentNodeId: readyNode.id });
-    await deps.appendTaskLog(task.id, `执行节点: ${readyNode.label} (${readyNode.type})`);
+    const nodeLogMeta = {
+      nodeId: readyNode.id,
+      nodeLabel: readyNode.label,
+    };
+    await deps.appendTaskLog(task.id, `节点开始执行: ${readyNode.label} (${readyNode.type})`, "info", nodeLogMeta);
 
     const payload = buildNodeInputPayload(task, readyNode, workflow, state.nodeOutputs);
-    const result = await executeGraphNode(task, sender, readyNode, payload, deps.nodeExecutionDeps);
+    let result: Awaited<ReturnType<typeof executeGraphNode>>;
+    try {
+      result = await executeGraphNode(task, sender, readyNode, payload, deps.nodeExecutionDeps);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.appendTaskLog(task.id, `节点执行失败: ${message}`, "error", nodeLogMeta);
+      throw error;
+    }
 
     if (result.kind === "wait") {
       state.pendingNodeId = readyNode.id;
@@ -271,7 +290,7 @@ export async function executeWorkflowGraph(
       runtime.interaction = result.interaction;
       await deps.writeTaskRuntime(task.id, runtime);
       await deps.setWaitingInteraction(task.id, result.interaction);
-      await deps.appendTaskLog(task.id, `节点 ${readyNode.label} 等待人工输入`, "warn");
+      await deps.appendTaskLog(task.id, "节点执行暂停，等待人工输入", "warn", nodeLogMeta);
       return;
     }
 
@@ -281,6 +300,7 @@ export async function executeWorkflowGraph(
     setGraphState(runtime, state);
     runtime.phase = "graph_running";
     await deps.writeTaskRuntime(task.id, runtime);
+    await deps.appendTaskLog(task.id, "节点执行完成", "info", nodeLogMeta);
   }
 
   runtime.phase = "graph_done";

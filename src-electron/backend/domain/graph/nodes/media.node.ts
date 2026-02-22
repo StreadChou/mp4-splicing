@@ -59,6 +59,14 @@ function readSplitConfig(...values: unknown[]): Record<string, unknown> {
   return {};
 }
 
+function previewPath(value: string): string {
+  const name = path.basename(value.trim());
+  if (!name) {
+    return value.trim();
+  }
+  return name;
+}
+
 export async function executeMediaNode(
   task: WorkflowTaskRecord,
   sender: WebContents,
@@ -97,6 +105,21 @@ export async function executeMediaNode(
     );
     if (files.length === 0) {
       throw new Error(`节点 ${node.label} 缺少候选视频输入(files)`);
+    }
+    await deps.appendTaskLog(task.id, `候选视频总量: ${String(files.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
+    for (let start = 0; start < files.length; start += 10) {
+      const end = Math.min(start + 10, files.length);
+      const summary = files
+        .slice(start, end)
+        .map((item) => previewPath(item))
+        .join(" | ");
+      await deps.appendTaskLog(task.id, `${String(end)}/${String(files.length)} 即将使用: ${summary}`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
     }
 
     const outputDir = path.resolve(asString(payload.outputDir || config.outputDir || task.runtimeInput.outputDir || task.runDir));
@@ -157,6 +180,21 @@ export async function executeMediaNode(
     if (videoPaths.length === 0) {
       throw new Error(`节点 ${node.label} 缺少待处理视频输入(files)`);
     }
+    await deps.appendTaskLog(task.id, `待去结尾视频总量: ${String(videoPaths.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
+    for (let start = 0; start < videoPaths.length; start += 10) {
+      const end = Math.min(start + 10, videoPaths.length);
+      const summary = videoPaths
+        .slice(start, end)
+        .map((item) => previewPath(item))
+        .join(" | ");
+      await deps.appendTaskLog(task.id, `${String(end)}/${String(videoPaths.length)} 即将处理: ${summary}`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+    }
 
     const splitConfig = readSplitConfig(payload.splitConfig, config.splitConfig, task.runtimeInput.splitConfig);
     if (Object.keys(splitConfig).length === 0) {
@@ -197,6 +235,10 @@ export async function executeMediaNode(
     }
 
     const summary = `去结尾处理完成，共 ${String(outputFiles.length)} 个视频`;
+    await deps.appendTaskLog(task.id, summary, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
     return {
       kind: "output",
       output: {

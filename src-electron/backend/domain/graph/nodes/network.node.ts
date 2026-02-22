@@ -4,6 +4,14 @@ import type { WorkflowGraphNode, WorkflowTaskRecord } from "../../../shared/type
 import { asBoolean, asNumber, asString, normalizeNodeOutput } from "../node-execution-helpers";
 import type { NodeExecutionDeps, NodeExecutionResult } from "../node-execution";
 
+function previewUrl(url: string): string {
+  const trimmed = url.trim();
+  if (trimmed.length <= 72) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 69)}...`;
+}
+
 export async function executeNetworkNode(
   task: WorkflowTaskRecord,
   sender: WebContents,
@@ -30,6 +38,19 @@ export async function executeNetworkNode(
     if (urls.length === 0) {
       throw new Error(`节点 ${node.label} 未提供可下载 URL`);
     }
+    await deps.appendTaskLog(task.id, `待下载总量: ${String(urls.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
+    for (let start = 0; start < urls.length; start += 10) {
+      const end = Math.min(start + 10, urls.length);
+      const slice = urls.slice(start, end).map((item) => previewUrl(item));
+      const summary = slice.join(" | ");
+      await deps.appendTaskLog(task.id, `${String(end)}/${String(urls.length)} 即将下载: ${summary}`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+    }
     const asyncDownload =
       payload.asyncDownload === undefined && config.asyncDownload === undefined
         ? true
@@ -39,6 +60,10 @@ export async function executeNetworkNode(
     const { success, failed } = await deps.runWithConcurrency(urls, maxConcurrent, async (url) => {
       const savedPath = await deps.downloadSingleFile(sender, url, outputDir);
       downloadedFiles.push(savedPath);
+    });
+    await deps.appendTaskLog(task.id, `下载完成: 成功 ${String(success)}，失败 ${String(failed)}`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
     });
     return {
       kind: "output",

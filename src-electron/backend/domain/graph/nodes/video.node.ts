@@ -68,6 +68,14 @@ function readSplitConfig(...values: unknown[]): Record<string, unknown> {
   return {};
 }
 
+function previewPath(value: string): string {
+  const name = path.basename(value.trim());
+  if (!name) {
+    return value.trim();
+  }
+  return name;
+}
+
 export async function executeVideoNode(
   task: WorkflowTaskRecord,
   sender: WebContents,
@@ -91,6 +99,23 @@ export async function executeVideoNode(
       .filter((item) => item.length > 0);
 
     const uniqueFiles = Array.from(new Set(candidateFiles));
+    if (uniqueFiles.length > 0) {
+      await deps.appendTaskLog(task.id, `候选视频总量: ${String(uniqueFiles.length)} 条`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+      for (let start = 0; start < uniqueFiles.length; start += 10) {
+        const end = Math.min(start + 10, uniqueFiles.length);
+        const summary = uniqueFiles
+          .slice(start, end)
+          .map((item) => previewPath(item))
+          .join(" | ");
+        await deps.appendTaskLog(task.id, `${String(end)}/${String(uniqueFiles.length)} 即将使用: ${summary}`, "info", {
+          nodeId: node.id,
+          nodeLabel: node.label,
+        });
+      }
+    }
     let inputDir = asString(payload.inputDir || config.inputDir || task.runtimeInput.inputDir);
     if (!inputDir && uniqueFiles.length > 0 && !splitConfig.forceInputDir) {
       const parentDirs = Array.from(new Set(uniqueFiles.map((item) => path.dirname(item))));
@@ -191,6 +216,21 @@ export async function executeVideoNode(
     if (videoPaths.length === 0) {
       throw new Error(`节点 ${node.label} 缺少可处理视频(files/videoPath)`);
     }
+    await deps.appendTaskLog(task.id, `待自动拆解视频总量: ${String(videoPaths.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
+    for (let start = 0; start < videoPaths.length; start += 10) {
+      const end = Math.min(start + 10, videoPaths.length);
+      const summary = videoPaths
+        .slice(start, end)
+        .map((item) => previewPath(item))
+        .join(" | ");
+      await deps.appendTaskLog(task.id, `${String(end)}/${String(videoPaths.length)} 即将拆解: ${summary}`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+    }
     const thresholdRaw = firstDefined([payload.threshold, splitConfig.threshold, config.threshold, task.runtimeInput.threshold]);
     const minDurationRaw = firstDefined([
       payload.minDuration,
@@ -229,6 +269,10 @@ export async function executeVideoNode(
 
     const uniqueGeneratedFiles = Array.from(new Set(generatedFiles.map((item) => path.resolve(item))));
     const summary = `自动拆解完成，处理 ${String(videoPaths.length)} 个视频，生成 ${String(uniqueGeneratedFiles.length)} 个片段`;
+    await deps.appendTaskLog(task.id, summary, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
     return {
       kind: "output",
       output: {
@@ -259,6 +303,21 @@ export async function executeVideoNode(
     if (videoPaths.length === 0) {
       throw new Error(`节点 ${node.label} 缺少可处理视频`);
     }
+    await deps.appendTaskLog(task.id, `待去结尾视频总量: ${String(videoPaths.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
+    for (let start = 0; start < videoPaths.length; start += 10) {
+      const end = Math.min(start + 10, videoPaths.length);
+      const summary = videoPaths
+        .slice(start, end)
+        .map((item) => previewPath(item))
+        .join(" | ");
+      await deps.appendTaskLog(task.id, `${String(end)}/${String(videoPaths.length)} 即将处理: ${summary}`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+    }
 
     const thresholdRaw = firstDefined([payload.threshold, splitConfig.threshold, config.threshold, task.runtimeInput.threshold]);
     const minDurationRaw = firstDefined([
@@ -288,6 +347,10 @@ export async function executeVideoNode(
         shuffleSegments: asBoolean(shuffleRaw),
       });
     }
+    await deps.appendTaskLog(task.id, `去结尾处理完成: ${String(videoPaths.length)} 条`, "info", {
+      nodeId: node.id,
+      nodeLabel: node.label,
+    });
     return {
       kind: "output",
       output: { files: [], processedCount: videoPaths.length, [defaultOutputKey]: videoPaths.length, result: videoPaths.length },

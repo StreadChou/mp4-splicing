@@ -76,7 +76,12 @@ export interface NodeExecutionDeps {
     segments: SegmentRange[],
     outputDir: string,
   ): Promise<string>;
-  appendTaskLog(taskId: string, message: string, level?: "info" | "error" | "warn"): Promise<void>;
+  appendTaskLog(
+    taskId: string,
+    message: string,
+    level?: "info" | "error" | "warn",
+    meta?: { nodeId?: string; nodeLabel?: string },
+  ): Promise<void>;
   parseSegmentsFromPayload(payload: Record<string, unknown>): SegmentRange[];
 }
 
@@ -132,6 +137,14 @@ function parseInteractionSchema(value: unknown): InteractionField[] {
     }
     return field;
   });
+}
+
+function previewPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return path.basename(trimmed) || trimmed;
 }
 
 export async function executeGraphNode(
@@ -303,6 +316,21 @@ export async function executeGraphNode(
       const recursive = config.recursive === undefined ? true : asBoolean(config.recursive);
       const maxDepth = recursive ? Math.max(0, Math.round(asNumber(config.maxDepth) || 2)) : 0;
       const files = recursive ? await deps.collectVideos(resolvedDir, maxDepth) : await deps.listMp4Files(resolvedDir);
+      await deps.appendTaskLog(task.id, `扫描得到视频总量: ${String(files.length)} 条`, "info", {
+        nodeId: node.id,
+        nodeLabel: node.label,
+      });
+      for (let start = 0; start < files.length; start += 10) {
+        const end = Math.min(start + 10, files.length);
+        const summary = files
+          .slice(start, end)
+          .map((item) => previewPath(item))
+          .join(" | ");
+        await deps.appendTaskLog(task.id, `${String(end)}/${String(files.length)} 即将输出: ${summary}`, "info", {
+          nodeId: node.id,
+          nodeLabel: node.label,
+        });
+      }
       return {
         kind: "output",
         output: {

@@ -1699,7 +1699,12 @@ function updateTask(taskId: string, patch: Partial<WorkflowTaskRecord>): Workflo
   return updated;
 }
 
-async function appendTaskLog(taskId: string, message: string, level: "info" | "error" | "warn" = "info"): Promise<void> {
+async function appendTaskLog(
+  taskId: string,
+  message: string,
+  level: "info" | "error" | "warn" = "info",
+  meta?: { nodeId?: string; nodeLabel?: string },
+): Promise<void> {
   if (isTaskRemoved(taskId)) {
     return;
   }
@@ -1716,6 +1721,8 @@ async function appendTaskLog(taskId: string, message: string, level: "info" | "e
         timestamp: toIsoNow(),
         level,
         message,
+        ...(meta?.nodeId ? { nodeId: meta.nodeId } : {}),
+        ...(meta?.nodeLabel ? { nodeLabel: meta.nodeLabel } : {}),
       });
       if (runtime.logs.length > TASK_LOG_LIMIT) {
         runtime.logs = runtime.logs.slice(runtime.logs.length - TASK_LOG_LIMIT);
@@ -1762,7 +1769,16 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               text: "",
             },
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 80 },
+          },
+          {
+            id: "output_dir",
+            type: "output_dir",
+            label: "选择输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 320 },
           },
           {
             id: "text_to_array",
@@ -1775,16 +1791,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               trim: true,
               removeEmpty: true,
             },
-            position: { x: 380, y: 90 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "选择输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 380, y: 260 },
+            position: { x: 500, y: 80 },
           },
           {
             id: "batch_download",
@@ -1797,7 +1804,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               maxConcurrent: 3,
               asyncDownload: true,
             },
-            position: { x: 700, y: 90 },
+            position: { x: 920, y: 200 },
           },
         ],
         edges: [
@@ -1826,7 +1833,16 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             inputs: [],
             outputs: ["dir"],
             config: {},
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 80 },
+          },
+          {
+            id: "output_dir",
+            type: "output_dir",
+            label: "拼接输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 320 },
           },
           {
             id: "read_dir",
@@ -1839,7 +1855,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               recursive: true,
               maxDepth: 2,
             },
-            position: { x: 360, y: 90 },
+            position: { x: 500, y: 80 },
           },
           {
             id: "fixed_start",
@@ -1850,7 +1866,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 360, y: 260 },
+            position: { x: 500, y: 320 },
           },
           {
             id: "fixed_end",
@@ -1861,16 +1877,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 360, y: 430 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "拼接输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 660, y: 430 },
+            position: { x: 500, y: 560 },
           },
           {
             id: "random_concat",
@@ -1883,7 +1890,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               randomCountMax: 4,
               runTimes: 1,
             },
-            position: { x: 980, y: 200 },
+            position: { x: 920, y: 250 },
           },
         ],
         edges: [
@@ -1914,7 +1921,16 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             inputs: [],
             outputs: ["dir"],
             config: {},
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 80 },
+          },
+          {
+            id: "output_dir",
+            type: "output_dir",
+            label: "处理输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 320 },
           },
           {
             id: "read_dir",
@@ -1927,7 +1943,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               recursive: false,
               maxDepth: 0,
             },
-            position: { x: 360, y: 90 },
+            position: { x: 500, y: 80 },
           },
           {
             id: "split_profile",
@@ -1943,7 +1959,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               skipFirst: false,
               skipLast: true,
             },
-            position: { x: 360, y: 260 },
+            position: { x: 500, y: 320 },
           },
           {
             id: "new_ending",
@@ -1954,16 +1970,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 360, y: 430 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "处理输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 660, y: 430 },
+            position: { x: 500, y: 560 },
           },
           {
             id: "remove_ending",
@@ -1974,7 +1981,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               shuffleSegments: false,
             },
-            position: { x: 980, y: 200 },
+            position: { x: 940, y: 260 },
           },
         ],
         edges: [
@@ -2005,7 +2012,16 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             inputs: [],
             outputs: ["dir"],
             config: {},
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 100 },
+          },
+          {
+            id: "output_dir",
+            type: "output_dir",
+            label: "拆解输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 320 },
           },
           {
             id: "read_dir",
@@ -2018,16 +2034,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               recursive: true,
               maxDepth: 2,
             },
-            position: { x: 360, y: 90 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 360, y: 260 },
+            position: { x: 500, y: 100 },
           },
           {
             id: "split_profile",
@@ -2043,7 +2050,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               skipFirst: false,
               skipLast: true,
             },
-            position: { x: 700, y: 260 },
+            position: { x: 500, y: 320 },
           },
           {
             id: "video_split",
@@ -2054,7 +2061,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               action: "auto_split",
             },
-            position: { x: 700, y: 90 },
+            position: { x: 920, y: 210 },
           },
         ],
         edges: [
@@ -2084,7 +2091,25 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             inputs: [],
             outputs: ["dir"],
             config: {},
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 80 },
+          },
+          {
+            id: "split_output_dir",
+            type: "output_dir",
+            label: "拆解输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 300 },
+          },
+          {
+            id: "concat_output_dir",
+            type: "output_dir",
+            label: "拼接输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 520 },
           },
           {
             id: "read_dir",
@@ -2097,16 +2122,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               recursive: true,
               maxDepth: 2,
             },
-            position: { x: 340, y: 90 },
-          },
-          {
-            id: "split_output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 340, y: 260 },
+            position: { x: 500, y: 80 },
           },
           {
             id: "split_profile",
@@ -2122,7 +2138,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               skipFirst: false,
               skipLast: true,
             },
-            position: { x: 620, y: 260 },
+            position: { x: 500, y: 300 },
           },
           {
             id: "video_split",
@@ -2133,7 +2149,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               action: "auto_split",
             },
-            position: { x: 620, y: 90 },
+            position: { x: 920, y: 180 },
           },
           {
             id: "fixed_start",
@@ -2144,7 +2160,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 900, y: 260 },
+            position: { x: 920, y: 420 },
           },
           {
             id: "fixed_end",
@@ -2155,16 +2171,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 900, y: 430 },
-          },
-          {
-            id: "concat_output_dir",
-            type: "output_dir",
-            label: "拼接输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 1180, y: 430 },
+            position: { x: 920, y: 640 },
           },
           {
             id: "random_concat",
@@ -2177,7 +2184,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               randomCountMax: 4,
               runTimes: 1,
             },
-            position: { x: 1460, y: 200 },
+            position: { x: 1340, y: 350 },
           },
         ],
         edges: [
@@ -2213,7 +2220,25 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               text: "",
             },
-            position: { x: 80, y: 90 },
+            position: { x: 80, y: 80 },
+          },
+          {
+            id: "download_output_dir",
+            type: "output_dir",
+            label: "下载输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 300 },
+          },
+          {
+            id: "split_output_dir",
+            type: "output_dir",
+            label: "拆解输出目录",
+            inputs: [],
+            outputs: ["outputDir"],
+            config: {},
+            position: { x: 80, y: 520 },
           },
           {
             id: "text_to_array",
@@ -2226,38 +2251,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               trim: true,
               removeEmpty: true,
             },
-            position: { x: 360, y: 90 },
-          },
-          {
-            id: "download_output_dir",
-            type: "output_dir",
-            label: "下载输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 360, y: 260 },
-          },
-          {
-            id: "batch_download",
-            type: "network",
-            label: "批量下载",
-            inputs: ["urls", "outputDir"],
-            outputs: ["files", "done"],
-            config: {
-              action: "batch_download",
-              maxConcurrent: 3,
-              asyncDownload: true,
-            },
-            position: { x: 660, y: 90 },
-          },
-          {
-            id: "split_output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 660, y: 260 },
+            position: { x: 500, y: 80 },
           },
           {
             id: "split_profile",
@@ -2273,7 +2267,20 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               skipFirst: false,
               skipLast: true,
             },
-            position: { x: 980, y: 260 },
+            position: { x: 500, y: 520 },
+          },
+          {
+            id: "batch_download",
+            type: "network",
+            label: "批量下载",
+            inputs: ["urls", "outputDir"],
+            outputs: ["files", "done"],
+            config: {
+              action: "batch_download",
+              maxConcurrent: 3,
+              asyncDownload: true,
+            },
+            position: { x: 920, y: 190 },
           },
           {
             id: "video_split",
@@ -2284,7 +2291,7 @@ function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               action: "auto_split",
             },
-            position: { x: 980, y: 90 },
+            position: { x: 1340, y: 300 },
           },
         ],
         edges: [
@@ -2379,13 +2386,6 @@ function createTaskSender(taskId: string): WebContents {
       if (!data?.event) {
         return;
       }
-      const payloadText =
-        typeof data.payload === "string"
-          ? data.payload
-          : typeof data.payload === "object"
-            ? JSON.stringify(data.payload)
-            : String(data.payload);
-      void appendTaskLog(taskId, `[${data.event}] ${payloadText}`);
       emitTaskBroadcast("task:progress", {
         taskId,
         event: data.event,
@@ -2890,6 +2890,13 @@ function asString(value: unknown): string {
   return "";
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item)).map((item) => item.trim()).filter(Boolean);
+}
+
 function asNumber(value: unknown): number {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -3214,10 +3221,21 @@ export async function invokeMp4Command(
       const taskId = asString(args.id);
       const task = findTask(taskId);
       const runtime = await readTaskRuntime(taskId);
+      const workflowGraph = task.workflowSnapshot ? normalizeWorkflowGraph(task.workflowSnapshot.graph) : null;
+      const rawGraphState = asRecord(runtime.context.graphState);
+      const pendingNodeId = asString(rawGraphState.pendingNodeId || runtime.context.pendingNodeId);
+      const executedNodeIds = Array.from(new Set(asStringArray(rawGraphState.executedNodeIds)));
       return {
         task,
         logs: runtime.logs,
         interactionRequest: runtime.interaction,
+        workflowGraph,
+        graphProgress: {
+          phase: runtime.phase,
+          executedNodeIds,
+          pendingNodeId,
+          totalNodes: workflowGraph?.nodes.length || 0,
+        },
       };
     }
 

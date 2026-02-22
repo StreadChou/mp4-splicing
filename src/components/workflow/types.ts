@@ -108,10 +108,21 @@ export interface TaskLogEntry {
   timestamp: string;
   level: "info" | "error" | "warn";
   message: string;
+  nodeId?: string;
+  nodeLabel?: string;
+}
+
+export interface TaskGraphProgress {
+  phase: string;
+  executedNodeIds: string[];
+  pendingNodeId: string;
+  totalNodes: number;
 }
 
 export interface TaskDetail {
   task: WorkflowTaskRecord;
   logs: TaskLogEntry[];
   interactionRequest: InteractionRequest | null;
+  workflowGraph: WorkflowGraph | null;
+  graphProgress: TaskGraphProgress;
 }
