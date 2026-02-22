@@ -56,12 +56,18 @@ jobs:
           chmod +x src-electron/bin/ffmpeg-aarch64-apple-darwin
           chmod +x src-electron/bin/ffprobe-aarch64-apple-darwin
 
+      - name: Prepare dmgbuild bundle (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          curl -L --retry 3 --retry-delay 2 -o "$RUNNER_TEMP/dmgbuild-bundle.tar.gz" "https://github.com/electron-userland/electron-builder-binaries/releases/download/dmg-builder%401.2.0/dmgbuild-bundle-arm64-75c8a6c.tar.gz"
+          mkdir -p "$RUNNER_TEMP/dmgbuild"
+          tar -xzf "$RUNNER_TEMP/dmgbuild-bundle.tar.gz" -C "$RUNNER_TEMP/dmgbuild"
+          echo "CUSTOM_DMGBUILD_PATH=$RUNNER_TEMP/dmgbuild/dmgbuild" >> "$GITHUB_ENV"
+
       - name: Build Electron package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
-          NPM_CONFIG_ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
-          ELECTRON_BUILDER_BINARIES_DOWNLOAD_OVERRIDE_URL: ${{ runner.os == 'macOS' && 'https://github.com/electron-userland/electron-builder-binaries/releases/download/dmg-builder@1.2.0' || '' }}
         run: ${{ matrix.build_cmd }} -- --publish never
 
       - name: Show packaged files
