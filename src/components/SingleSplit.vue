@@ -85,9 +85,9 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "src/tauri-compat/core";
+import { open } from "src/tauri-compat/dialog";
+import { listen } from "src/tauri-compat/event";
 import VideoSplitter from "./VideoSplitter.vue";
 
 interface VideoMetadata {

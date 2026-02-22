@@ -201,7 +201,7 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc } from "src/tauri-compat/core";
 import { QScrollArea } from "quasar";
 
 interface VideoMetadata {

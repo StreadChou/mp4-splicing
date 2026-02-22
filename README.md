@@ -1,46 +1,24 @@
-# MP4 视频处理工具
+# mp4handler (mp4handler)
 
-一个基于 Tauri 2.x + Vue 3 + TypeScript 开发的跨平台桌面应用，提供视频拼接、拆解和批量下载功能。
+mp4handler
 
-## 功能特性
-
-### 1. 视频拼接
-- 从指定目录随机选择视频进行拼接
-- 支持添加固定结尾视频
-- 自动检测视频兼容性
-- 支持快速模式和重新编码模式
-
-### 2. 视频拆解
-- **单个拆解**: 可视化帧选择界面，精确按帧切割
-- **批量拆解**: 批量处理多个视频，支持断点续传
-- **自动拆解**: 基于帧相似度智能检测场景切换点
-
-### 3. 批量下载 (v0.1.11 新增)
-- 支持从多个 URL 并发下载视频
-- 实时显示下载进度和速度
-- 自动跳过空行和无效 URL
-- 可配置并发下载数量
-
-## 技术栈
-
-- **前端**: Vue 3 + TypeScript + Quasar
-- **后端**: Tauri 2.x + Rust
-- **视频处理**: FFmpeg (内置)
-- **网络请求**: reqwest + tokio
-
-## 开发
-
+## Install the dependencies
 ```bash
-# 安装依赖
-yarn install
-
-# 开发模式
-yarn tauri dev
-
-# 打包
-yarn tauri build
+yarn
+# or
+npm install
 ```
 
-## 许可证
+### Start the app in development mode (hot-code reloading, error reporting, etc.)
+```bash
+quasar dev
+```
 
-请确保遵守 FFmpeg 的 LGPL/GPL 许可证要求。
+
+### Build the app for production
+```bash
+quasar build
+```
+
+### Customize the configuration
+See [Configuring quasar.config.js](https://v2.quasar.dev/quasar-cli-vite/quasar-config-js).

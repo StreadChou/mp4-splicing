@@ -1,0 +1,20 @@
+// app global css in SCSS form
+@import "@vue-flow/core/dist/style.css";
+@import "@vue-flow/core/dist/theme-default.css";
+
+body {
+  background: #020617;
+  color: #e5e7eb;
+}
+
+.q-page {
+  background: transparent;
+}
+
+.q-card {
+  border-radius: 12px;
+}
+
+.q-field--outlined .q-field__control {
+  border-radius: 10px;
+}

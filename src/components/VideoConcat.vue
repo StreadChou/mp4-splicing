@@ -206,8 +206,8 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "src/tauri-compat/core";
+import { open } from "src/tauri-compat/dialog";
 
 const inputDir = ref("");
 const endingVideo = ref("");
