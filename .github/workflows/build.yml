@@ -57,7 +57,12 @@ jobs:
           chmod +x src-electron/bin/ffprobe-aarch64-apple-darwin
 
       - name: Build Electron package
-        run: ${{ matrix.build_cmd }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_electron_mirror: https://github.com/electron/electron/releases/download/
+          ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+        run: ${{ matrix.build_cmd }} -- --publish never
 
       - name: Show packaged files
         shell: bash
