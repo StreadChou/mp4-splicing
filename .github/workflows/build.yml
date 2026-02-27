@@ -5,12 +5,18 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "可选：用于手动构建时同步版本号（示例：v0.2.8）"
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build:
+    name: Build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +52,36 @@ jobs:
         with:
           node-version: 22
           cache: yarn
+
+      - name: Resolve app version
+        shell: bash
+        run: |
+          raw_tag=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            raw_tag="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            raw_tag="${{ inputs.release_tag }}"
+          fi
+
+          if [ -z "$raw_tag" ]; then
+            app_version="$(node -p "require('./package.json').version")"
+          else
+            if [[ "$raw_tag" != v* ]]; then
+              echo "::error::release_tag 必须以 v 开头，例如 v0.2.8"
+              exit 1
+            fi
+            app_version="${raw_tag#v}"
+          fi
+
+          echo "APP_VERSION=$app_version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$raw_tag" >> "$GITHUB_ENV"
+          echo "Using version: $app_version"
+
+      - name: Sync package.json version
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const p=require('./package.json');p.version=process.env.APP_VERSION;fs.writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');"
+          echo "package.json version => $(node -p "require('./package.json').version")"
 
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
@@ -83,7 +119,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}-${{ env.APP_VERSION }}
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error
 
@@ -97,18 +133,21 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: "*-build"
+          pattern: "*-build-*"
           merge-multiple: true
           path: release-artifacts
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             release-artifacts/**/*.dmg
-            release-artifacts/**/*Setup*.exe
+            release-artifacts/**/*.exe
             release-artifacts/**/latest.yml
             release-artifacts/**/latest-mac.yml
             release-artifacts/**/*.dmg.blockmap
-            release-artifacts/**/*Setup*.exe.blockmap
+            release-artifacts/**/*.exe.blockmap
