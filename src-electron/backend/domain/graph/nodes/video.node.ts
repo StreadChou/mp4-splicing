@@ -25,6 +25,28 @@ function asSinglePath(value: unknown): string[] {
   return [path.resolve(value.trim())];
 }
 
+function resolveStrictSinglePath(value: unknown, label: string): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? path.resolve(trimmed) : null;
+  }
+  if (Array.isArray(value)) {
+    const paths = value
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .map((item) => path.resolve(item));
+    const unique = Array.from(new Set(paths));
+    if (unique.length === 0) {
+      return null;
+    }
+    if (unique.length > 1) {
+      throw new Error(`auto_split 仅支持单文件输入，${label} 收到 ${String(unique.length)} 个文件，请先接 iterate 节点`);
+    }
+    return unique[0] as string;
+  }
+  return null;
+}
+
 function firstDefined(values: unknown[]): unknown {
   for (const value of values) {
     if (value !== undefined) {
@@ -100,6 +122,48 @@ export async function executeSplitAlgoNode(
   return createSplitAlgorithmOutput(algorithm, base.threshold, base.minDuration);
 }
 
+function resolveAutoSplitVideoPath(
+  payload: Record<string, unknown>,
+  config: Record<string, unknown>,
+  runtimeInput: Record<string, unknown>,
+): string {
+  const directCandidates: Array<{ value: unknown; label: string }> = [
+    { value: payload.file, label: "payload.file" },
+    { value: payload.videoPath, label: "payload.videoPath" },
+    { value: config.file, label: "config.file" },
+    { value: config.videoPath, label: "config.videoPath" },
+    { value: runtimeInput.file, label: "runtimeInput.file" },
+    { value: runtimeInput.videoPath, label: "runtimeInput.videoPath" },
+  ];
+
+  for (const candidate of directCandidates) {
+    const resolved = resolveStrictSinglePath(candidate.value, candidate.label);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  const fallbackPaths = Array.from(
+    new Set([
+      ...asPathList(payload.files),
+      ...asPathList(payload.result),
+      ...asPathList(runtimeInput.files),
+      ...asSinglePath(payload.files),
+      ...asSinglePath(payload.result),
+      ...asSinglePath(runtimeInput.files),
+    ]),
+  );
+
+  if (fallbackPaths.length === 1) {
+    return fallbackPaths[0] as string;
+  }
+  if (fallbackPaths.length > 1) {
+    throw new Error(`auto_split 仅支持单文件输入，当前收到 ${String(fallbackPaths.length)} 个文件，请先接 iterate 节点`);
+  }
+
+  throw new Error("auto_split 缺少可处理视频(file/videoPath)");
+}
+
 export async function executeAutoSplitNode(
   task: WorkflowTaskRecord,
   sender: WebContents,
@@ -110,68 +174,36 @@ export async function executeAutoSplitNode(
 ): Promise<NodeExecutionResult> {
   const outputDir = path.resolve(asString(payload.outputDir || config.outputDir || task.runtimeInput.outputDir || task.runDir));
   await deps.ensureDir(outputDir);
-
-  const loopMeta =
-    payload.__loop && typeof payload.__loop === "object" && !Array.isArray(payload.__loop)
-      ? (payload.__loop as Record<string, unknown>)
-      : {};
-  const maxConcurrent = Math.max(
-    1,
-    Math.round(asNumber(loopMeta.concurrency ?? payload.loopConcurrency ?? config.loopConcurrency ?? task.runtimeInput.loopConcurrency ?? 1)),
-  );
-
-  const videoPaths = Array.from(
-    new Set([
-      ...asPathList(payload.file),
-      ...asPathList(payload.files),
-      ...asPathList(payload.result),
-      ...asPathList(task.runtimeInput.files),
-      ...asSinglePath(payload.file),
-      ...(payload.videoPath ? [path.resolve(asString(payload.videoPath))] : []),
-      ...asSinglePath(task.runtimeInput.file),
-      ...(task.runtimeInput.videoPath ? [path.resolve(asString(task.runtimeInput.videoPath))] : []),
-    ]),
-  );
-
-  if (videoPaths.length === 0) {
-    throw new Error(`节点 ${getGraphNodeLabel(node)} 缺少可处理视频(file/videoPath)`);
-  }
+  const videoPath = resolveAutoSplitVideoPath(payload, config, task.runtimeInput);
 
   const splitAlgorithm = readSplitAlgorithm(payload, config, task.runtimeInput);
   const dropHead = asBoolean(payload.dropHead ?? config.dropHead ?? task.runtimeInput.dropHead ?? false);
   const dropTail = asBoolean(payload.dropTail ?? config.dropTail ?? task.runtimeInput.dropTail ?? false);
 
-  await deps.appendTaskLog(task.id, `待自动拆解视频总量: ${String(videoPaths.length)} 条`, "info", {
+  await deps.appendTaskLog(task.id, `自动拆解输入视频: ${path.basename(videoPath)}`, "info", {
     nodeId: node.id,
     nodeLabel: getGraphNodeLabel(node),
   });
 
-  const generatedFiles: string[] = [];
-  const { success, failed } = await deps.runWithConcurrency(videoPaths, maxConcurrent, async (videoPath) => {
-    const segmentOutputDir = path.join(outputDir, path.parse(videoPath).name);
-    const existingBefore = await deps.listMp4Files(segmentOutputDir).catch(() => []);
+  const segmentOutputDir = path.join(outputDir, path.parse(videoPath).name);
+  const existingBefore = await deps.listMp4Files(segmentOutputDir).catch(() => []);
 
-    await deps.autoSplitVideoInternal(sender, {
-      videoPath,
-      outputDir,
-      algorithm: splitAlgorithm.algorithm,
-      threshold: splitAlgorithm.threshold,
-      minDuration: splitAlgorithm.minDuration,
-      skipFirst: dropHead,
-      skipLast: dropTail,
-    });
-
-    const existingAfter = await deps.listMp4Files(segmentOutputDir).catch(() => []);
-    const beforeSet = new Set(existingBefore.map((item) => path.resolve(item)));
-    const incremental = existingAfter.filter((item) => !beforeSet.has(path.resolve(item)));
-    generatedFiles.push(...(incremental.length > 0 ? incremental : existingAfter));
+  await deps.autoSplitVideoInternal(sender, {
+    videoPath,
+    outputDir,
+    algorithm: splitAlgorithm.algorithm,
+    threshold: splitAlgorithm.threshold,
+    minDuration: splitAlgorithm.minDuration,
+    skipFirst: dropHead,
+    skipLast: dropTail,
   });
 
+  const existingAfter = await deps.listMp4Files(segmentOutputDir).catch(() => []);
+  const beforeSet = new Set(existingBefore.map((item) => path.resolve(item)));
+  const incremental = existingAfter.filter((item) => !beforeSet.has(path.resolve(item)));
+  const generatedFiles = incremental.length > 0 ? incremental : existingAfter;
   const uniqueGeneratedFiles = Array.from(new Set(generatedFiles.map((item) => path.resolve(item))));
-  const summary =
-    failed > 0
-      ? `自动拆解完成，成功 ${String(success)} 个，失败 ${String(failed)} 个，生成 ${String(uniqueGeneratedFiles.length)} 个片段`
-      : `自动拆解完成，处理 ${String(videoPaths.length)} 个视频，生成 ${String(uniqueGeneratedFiles.length)} 个片段`;
+  const summary = `自动拆解完成，生成 ${String(uniqueGeneratedFiles.length)} 个片段`;
   await deps.appendTaskLog(task.id, summary, "info", {
     nodeId: node.id,
     nodeLabel: getGraphNodeLabel(node),
@@ -181,7 +213,7 @@ export async function executeAutoSplitNode(
     kind: "output",
     output: {
       files: uniqueGeneratedFiles,
-      processedCount: videoPaths.length,
+      processedCount: 1,
       message: summary,
       result: summary,
     },
