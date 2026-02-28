@@ -1,4 +1,5 @@
 import type { WebContents } from "electron";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { WorkflowGraphNode, WorkflowTaskRecord } from "../../../shared/types";
 import { asBoolean, asNumber, asString, getGraphNodeLabel } from "../node-execution-helpers";
@@ -72,11 +73,7 @@ export async function executeSplitComposePerVideoNode(
   config: Record<string, unknown>,
   deps: NodeExecutionDeps,
 ): Promise<NodeExecutionResult> {
-  const splitOutputRoot = path.resolve(
-    asString(payload.splitOutputDir ?? config.splitOutputDir ?? task.runtimeInput.splitOutputDir ?? task.runDir),
-  );
   const outputRoot = path.resolve(asString(payload.outputDir ?? config.outputDir ?? task.runtimeInput.outputDir ?? task.runDir));
-  await deps.ensureDir(splitOutputRoot);
   await deps.ensureDir(outputRoot);
 
   const filePaths = Array.from(
@@ -110,14 +107,21 @@ export async function executeSplitComposePerVideoNode(
   const failedVideos: string[] = [];
 
   const { success, failed } = await deps.runWithConcurrency(filePaths, maxConcurrent, async (videoPath) => {
+    const tempOutputRoot = path.join(
+      task.runDir,
+      ".tmp",
+      "split_compose_per_video",
+      `${node.id}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
+    );
     try {
+      await deps.ensureDir(tempOutputRoot);
       const videoName = path.parse(videoPath).name;
-      const segmentOutputDir = path.join(splitOutputRoot, videoName);
+      const segmentOutputDir = path.join(tempOutputRoot, videoName);
       const existingBefore = await deps.listMp4Files(segmentOutputDir).catch(() => []);
 
       await deps.autoSplitVideoInternal(sender, {
         videoPath,
-        outputDir: splitOutputRoot,
+        outputDir: tempOutputRoot,
         algorithm: splitAlgorithm.algorithm,
         threshold: splitAlgorithm.threshold,
         minDuration: splitAlgorithm.minDuration,
@@ -151,6 +155,8 @@ export async function executeSplitComposePerVideoNode(
     } catch {
       failedVideos.push(videoPath);
       throw new Error("single_video_process_failed");
+    } finally {
+      await fsp.rm(tempOutputRoot, { recursive: true, force: true }).catch(() => void 0);
     }
   });
 

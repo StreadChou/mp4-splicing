@@ -4,7 +4,7 @@ import type { NodeDefinition } from "../types";
 export const SPLIT_COMPOSE_PER_VIDEO_NODE: NodeDefinition = {
   type: NodeType.SPLIT_COMPOSE_PER_VIDEO,
   name: "单视频拆解并组合",
-  summary: "针对单个视频执行拆解后重组，可用于去结尾并替换新结尾。",
+  summary: "针对单个视频执行拆解后重组，拆解过程使用临时目录并自动清理。",
   palette: true,
   ports: [
     {
@@ -13,13 +13,6 @@ export const SPLIT_COMPOSE_PER_VIDEO_NODE: NodeDefinition = {
       valueType: PortDataType.ABSOLUTE_PATH,
       required: true,
       description: "单个待处理视频路径（由循环节点逐个传入）。",
-    },
-    {
-      name: "splitOutputDir",
-      direction: PortDirection.INPUT,
-      valueType: PortDataType.ABSOLUTE_PATH,
-      required: true,
-      description: "拆解片段输出根目录。",
     },
     {
       name: "outputDir",

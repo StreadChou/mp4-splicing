@@ -76,7 +76,6 @@ const PORT_LABEL_MAP: Record<string, string> = {
   result: "结果",
   in: "输入",
   out: "输出",
-  splitOutputDir: "拆解输出目录",
 };
 
 /** 基础类型到中文展示名映射。 */

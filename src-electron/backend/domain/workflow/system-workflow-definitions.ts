@@ -159,16 +159,10 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             position: { x: 100, y: 100 },
           },
           {
-            id: "split_output_dir",
-            type: "output_dir",
-            config: {},
-            position: { x: 100, y: 340 },
-          },
-          {
             id: "compose_output_dir",
             type: "output_dir",
             config: {},
-            position: { x: 100, y: 580 },
+            position: { x: 100, y: 360 },
           },
           {
             id: "read_dir",
@@ -186,7 +180,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               threshold: 0.7,
               minDuration: 2,
             },
-            position: { x: 520, y: 340 },
+            position: { x: 520, y: 360 },
           },
           {
             id: "loop",
@@ -202,7 +196,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 960, y: 580 },
+            position: { x: 960, y: 360 },
           },
           {
             id: "split_compose_per_video",
@@ -219,10 +213,9 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
           { id: "e2", source: "read_dir", target: "loop", sourceHandle: "out-0", targetHandle: "in-0" },
           { id: "e3", source: "loop", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e4", source: "split_output_dir", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e5", source: "compose_output_dir", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e6", source: "split_algo", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-3" },
-          { id: "e7", source: "new_ending", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-4" },
+          { id: "e4", source: "compose_output_dir", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-1" },
+          { id: "e5", source: "split_algo", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-2" },
+          { id: "e6", source: "new_ending", target: "split_compose_per_video", sourceHandle: "out-0", targetHandle: "in-3" },
         ],
       },
     },
