@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowMeta } from "../../shared/types";
+import type { WorkflowDefinition, WorkflowGraph, WorkflowGraphEdge, WorkflowGraphNode, WorkflowMeta } from "../../shared/types";
 
 interface CreateWorkflowServiceDeps {
   getWorkflowSchemaVersion(): number;
@@ -15,6 +15,85 @@ interface CreateWorkflowServiceDeps {
 }
 
 export function createWorkflowService(deps: CreateWorkflowServiceDeps) {
+  function normalizeRemark(value: unknown): string {
+    if (typeof value === "string") {
+      return value.trim();
+    }
+    return "";
+  }
+
+  function toNodeMap(nodes: WorkflowGraphNode[]): Map<string, WorkflowGraphNode> {
+    return new Map(nodes.map((node) => [node.id, node] as const));
+  }
+
+  function toEdgeSignatures(edges: WorkflowGraphEdge[]): string[] {
+    return edges
+      .map((edge) => [edge.source, edge.target, edge.sourceHandle || "", edge.targetHandle || ""].join("::"))
+      .sort();
+  }
+
+  function isSystemGraphStructureMatched(current: WorkflowGraph, expected: WorkflowGraph): boolean {
+    if (current.nodes.length !== expected.nodes.length || current.edges.length !== expected.edges.length) {
+      return false;
+    }
+
+    const currentNodeMap = toNodeMap(current.nodes);
+    for (const expectedNode of expected.nodes) {
+      const currentNode = currentNodeMap.get(expectedNode.id);
+      if (!currentNode) {
+        return false;
+      }
+      if (currentNode.type !== expectedNode.type) {
+        return false;
+      }
+      if (normalizeRemark(currentNode.remark) !== normalizeRemark(expectedNode.remark)) {
+        return false;
+      }
+    }
+
+    const currentEdgeSignatures = toEdgeSignatures(current.edges);
+    const expectedEdgeSignatures = toEdgeSignatures(expected.edges);
+    if (currentEdgeSignatures.length !== expectedEdgeSignatures.length) {
+      return false;
+    }
+    for (let i = 0; i < currentEdgeSignatures.length; i += 1) {
+      if (currentEdgeSignatures[i] !== expectedEdgeSignatures[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function mergeSystemGraphKeepUserNodeState(expected: WorkflowGraph, current: WorkflowGraph): WorkflowGraph {
+    const currentNodeMap = toNodeMap(current.nodes);
+    return {
+      nodes: expected.nodes.map((expectedNode) => {
+        const currentNode = currentNodeMap.get(expectedNode.id);
+        if (
+          !currentNode ||
+          currentNode.type !== expectedNode.type ||
+          normalizeRemark(currentNode.remark) !== normalizeRemark(expectedNode.remark)
+        ) {
+          return { ...expectedNode };
+        }
+        const mergedNode: WorkflowGraphNode = {
+          ...expectedNode,
+        };
+        const nextConfig = currentNode.config ?? expectedNode.config;
+        const nextPosition = currentNode.position ?? expectedNode.position;
+        if (nextConfig) {
+          mergedNode.config = nextConfig;
+        }
+        if (nextPosition) {
+          mergedNode.position = nextPosition;
+        }
+        return mergedNode;
+      }),
+      edges: expected.edges.map((edge) => ({ ...edge })),
+    };
+  }
+
   function normalizeWorkflowName(name: string): string {
     return name.trim().toLowerCase();
   }
@@ -76,6 +155,30 @@ export function createWorkflowService(deps: CreateWorkflowServiceDeps) {
 
       if (normalized !== existing) {
         byId.set(systemWorkflow.id, normalized);
+        changed = true;
+      }
+
+      const structureMatched = isSystemGraphStructureMatched(normalized.graph, systemWorkflow.graph);
+      const metaChanged =
+        normalized.name !== systemWorkflow.name ||
+        normalized.description !== systemWorkflow.description ||
+        normalized.source !== "system" ||
+        normalized.readonly !== false ||
+        normalized.schemaVersion !== deps.workflowSchemaVersion ||
+        normalized.systemKind !== systemWorkflow.systemKind;
+      if (!structureMatched || metaChanged) {
+        const nextWorkflow: WorkflowDefinition = {
+          ...normalized,
+          name: systemWorkflow.name,
+          description: systemWorkflow.description,
+          source: "system",
+          readonly: false,
+          schemaVersion: deps.workflowSchemaVersion,
+          systemKind: systemWorkflow.systemKind,
+          graph: structureMatched ? normalized.graph : mergeSystemGraphKeepUserNodeState(systemWorkflow.graph, normalized.graph),
+          updatedAt: systemWorkflow.updatedAt,
+        };
+        byId.set(systemWorkflow.id, nextWorkflow);
         changed = true;
       }
     }

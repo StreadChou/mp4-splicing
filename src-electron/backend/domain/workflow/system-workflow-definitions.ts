@@ -513,6 +513,15 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             position: { x: 1400, y: 220 },
           },
           {
+            id: "iterate_downloaded_files",
+            type: "iterate",
+            remark: "逐个下载文件拆解",
+            config: {
+              concurrency: 2,
+            },
+            position: { x: 1840, y: 220 },
+          },
+          {
             id: "split_algo",
             type: "split_algo_ssim",
             remark: "拆解算法配置",
@@ -520,7 +529,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               threshold: 0.7,
               minDuration: 2,
             },
-            position: { x: 960, y: 580 },
+            position: { x: 1840, y: 580 },
           },
           {
             id: "auto_split",
@@ -530,7 +539,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               dropHead: false,
               dropTail: false,
             },
-            position: { x: 1840, y: 360 },
+            position: { x: 2280, y: 360 },
           },
         ],
         edges: [
@@ -538,9 +547,10 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           { id: "e2", source: "text_to_array", target: "loop", sourceHandle: "out-0", targetHandle: "in-0" },
           { id: "e3", source: "loop", target: "download", sourceHandle: "out-0", targetHandle: "in-0" },
           { id: "e4", source: "download_output_dir", target: "download", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e5", source: "download", target: "auto_split", sourceHandle: "out-1", targetHandle: "in-0" },
-          { id: "e6", source: "split_output_dir", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e7", source: "split_algo", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-2" },
+          { id: "e5", source: "download", target: "iterate_downloaded_files", sourceHandle: "out-1", targetHandle: "in-0" },
+          { id: "e6", source: "iterate_downloaded_files", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e7", source: "split_output_dir", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-1" },
+          { id: "e8", source: "split_algo", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-2" },
         ],
       },
     },

@@ -490,6 +490,18 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           fullWidth: true,
         },
         {
+          id: "das_split_concurrency",
+          label: "逐个文件拆解并发数",
+          kind: "number",
+          node: { type: "iterate", remark: "逐个下载文件拆解" },
+          key: "concurrency",
+          min: 1,
+          step: 1,
+          defaultValue: 2,
+          fullWidth: true,
+          helpText: "控制下载完成后，同时拆解几个视频文件",
+        },
+        {
           id: "das_drop_head",
           label: "丢弃开头片段",
           kind: "boolean",
