@@ -4,7 +4,7 @@
       <div class="text-subtitle2 text-weight-medium">{{ card.nodeLabel }}</div>
       <div class="text-caption text-grey-5">{{ card.nodeTypeLabel }} ({{ card.nodeType }})</div>
     </q-card-section>
-    <q-separator dark />
+    <q-separator />
     <q-card-section class="q-pt-sm">
       <template v-if="card.fields.length > 0">
         <div v-for="field in card.fields" :key="`${card.nodeId}-${field.key}`" class="q-mb-sm">
@@ -203,8 +203,8 @@ function emitPickPath(key: string, directory: boolean): void {
 
 <style scoped>
 .board-node-card {
-  background: #0f172a;
-  border-color: #243043;
-  color: #e5e7eb;
+  background: rgba(240, 255, 252, 0.86);
+  border-color: rgba(9, 91, 85, 0.15);
+  color: #15423f;
 }
 </style>

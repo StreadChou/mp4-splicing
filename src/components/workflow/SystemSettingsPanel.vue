@@ -8,10 +8,10 @@
       </q-btn>
     </q-card-section>
 
-    <q-separator dark />
+    <q-separator />
 
     <q-card-section>
-      <q-banner rounded dense class="bg-grey-9 text-grey-3 q-mb-md">
+      <q-banner rounded dense class="bg-teal-1 text-teal-10 q-mb-md">
         临时目录用于逐帧拆解等中间文件。未手动设置时默认使用系统临时目录，并按用途自动创建子目录。
       </q-banner>
 
@@ -156,9 +156,9 @@ onMounted(() => {
 <style scoped>
 .settings-card {
   min-height: calc(100vh - 120px);
-  background: #111827;
-  border-color: #243043;
-  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(9, 91, 85, 0.15);
+  color: #15423f;
 }
 
 .settings-subdir {
@@ -167,6 +167,6 @@ onMounted(() => {
 }
 
 .settings-subdir code {
-  color: #fbbf24;
+  color: #0e9488;
 }
 </style>

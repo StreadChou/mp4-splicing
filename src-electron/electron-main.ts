@@ -25,6 +25,33 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | undefined;
 const workflowEditorWindows = new Set<BrowserWindow>();
 
+function emitWindowState(targetWindow: BrowserWindow) {
+  if (targetWindow.isDestroyed()) {
+    return;
+  }
+  targetWindow.webContents.send("mp4handler:event", {
+    event: "window:state",
+    payload: {
+      maximized: targetWindow.isMaximized(),
+    },
+  });
+}
+
+function bindWindowStateEvents(targetWindow: BrowserWindow) {
+  targetWindow.on("maximize", () => {
+    emitWindowState(targetWindow);
+  });
+  targetWindow.on("unmaximize", () => {
+    emitWindowState(targetWindow);
+  });
+  targetWindow.on("enter-full-screen", () => {
+    emitWindowState(targetWindow);
+  });
+  targetWindow.on("leave-full-screen", () => {
+    emitWindowState(targetWindow);
+  });
+}
+
 function getMimeType(targetPath: string): string {
   const ext = path.extname(targetPath).toLowerCase();
   switch (ext) {
@@ -88,6 +115,7 @@ async function createWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
   mainWindow = new BrowserWindow({
     icon: path.resolve(currentDir, "icons/icon.png"),
+    frame: false,
     width: screenWidth,
     height: screenHeight,
     minWidth: 1100,
@@ -112,6 +140,8 @@ async function createWindow() {
   }
 
   mainWindow.maximize();
+  bindWindowStateEvents(mainWindow);
+  emitWindowState(mainWindow);
 
   if (process.env.DEBUGGING) {
     mainWindow.webContents.openDevTools({ mode: "right" });
@@ -132,6 +162,7 @@ async function createWorkflowEditorWindow(workflowId?: string) {
 
   const editorWindow = new BrowserWindow({
     icon: path.resolve(currentDir, "icons/icon.png"),
+    frame: false,
     width: 1600,
     height: 980,
     minWidth: 1280,
@@ -149,6 +180,8 @@ async function createWorkflowEditorWindow(workflowId?: string) {
   });
 
   editorWindow.maximize();
+  bindWindowStateEvents(editorWindow);
+  emitWindowState(editorWindow);
 
   if (process.env.DEV) {
     await editorWindow.loadURL(`${process.env.APP_URL}#${hashPath}`);
@@ -163,6 +196,12 @@ async function createWorkflowEditorWindow(workflowId?: string) {
   workflowEditorWindows.add(editorWindow);
   editorWindow.on("closed", () => {
     workflowEditorWindows.delete(editorWindow);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("mp4handler:event", {
+        event: "ui:workflow-list-refresh",
+        payload: {},
+      });
+    }
   });
 }
 
@@ -259,6 +298,47 @@ ipcMain.handle(
     return result.filePaths[0] ?? null;
   },
 );
+
+ipcMain.handle("mp4handler:window-minimize", (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!ownerWindow || ownerWindow.isDestroyed()) {
+    return false;
+  }
+  ownerWindow.minimize();
+  emitWindowState(ownerWindow);
+  return true;
+});
+
+ipcMain.handle("mp4handler:window-toggle-maximize", (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!ownerWindow || ownerWindow.isDestroyed()) {
+    return false;
+  }
+  if (ownerWindow.isMaximized()) {
+    ownerWindow.unmaximize();
+  } else {
+    ownerWindow.maximize();
+  }
+  emitWindowState(ownerWindow);
+  return true;
+});
+
+ipcMain.handle("mp4handler:window-close", (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!ownerWindow || ownerWindow.isDestroyed()) {
+    return false;
+  }
+  ownerWindow.close();
+  return true;
+});
+
+ipcMain.handle("mp4handler:window-is-maximized", (event) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!ownerWindow || ownerWindow.isDestroyed()) {
+    return false;
+  }
+  return ownerWindow.isMaximized();
+});
 
 void app.whenReady().then(async () => {
   await registerLocalFileProtocol();

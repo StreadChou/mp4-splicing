@@ -18,6 +18,10 @@ declare global {
       }): Promise<string | string[] | null>;
       openWorkflowEditor(workflowId?: string): Promise<boolean>;
       openTaskInMain(taskId: string): Promise<boolean>;
+      windowMinimize(): Promise<boolean>;
+      windowToggleMaximize(): Promise<boolean>;
+      windowClose(): Promise<boolean>;
+      windowIsMaximized(): Promise<boolean>;
       on(eventName: string, callback: (payload: unknown) => void): () => void;
     };
   }

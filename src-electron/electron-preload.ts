@@ -37,6 +37,22 @@ contextBridge.exposeInMainWorld("mp4handler", {
     return ipcRenderer.invoke("mp4handler:open-task", taskId);
   },
 
+  windowMinimize: () => {
+    return ipcRenderer.invoke("mp4handler:window-minimize") as Promise<boolean>;
+  },
+
+  windowToggleMaximize: () => {
+    return ipcRenderer.invoke("mp4handler:window-toggle-maximize") as Promise<boolean>;
+  },
+
+  windowClose: () => {
+    return ipcRenderer.invoke("mp4handler:window-close") as Promise<boolean>;
+  },
+
+  windowIsMaximized: () => {
+    return ipcRenderer.invoke("mp4handler:window-is-maximized") as Promise<boolean>;
+  },
+
   on: (eventName: string, callback: EventCallback) => {
     const callbackSet = listeners.get(eventName) ?? new Set<EventCallback>();
     callbackSet.add(callback);

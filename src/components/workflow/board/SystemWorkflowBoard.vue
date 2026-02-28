@@ -1,6 +1,6 @@
 <template>
   <div class="system-board">
-    <q-banner dense rounded class="bg-grey-9 text-grey-3 q-mb-md">
+    <q-banner dense rounded class="bg-teal-1 text-teal-10 q-mb-md">
       小白看板：仅保留关键参数，按步骤分块设置。
     </q-banner>
 
@@ -15,7 +15,7 @@
         <div class="text-subtitle1 text-weight-medium">{{ section.title }}</div>
         <div v-if="section.description" class="text-caption text-grey-5 q-mt-xs">{{ section.description }}</div>
       </q-card-section>
-      <q-separator dark />
+      <q-separator />
       <q-card-section>
         <div class="row q-col-gutter-md">
           <div
@@ -862,8 +862,8 @@ function pickPath(field: ResolvedField, directory: boolean) {
 }
 
 .system-board-section {
-  background: #0f172a;
-  border-color: #243043;
-  color: #e5e7eb;
+  background: rgba(240, 255, 252, 0.86);
+  border-color: rgba(9, 91, 85, 0.15);
+  color: #15423f;
 }
 </style>

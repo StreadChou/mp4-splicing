@@ -1,18 +1,79 @@
 <template>
-  <div class="comfy-editor">
+  <div class="comfy-editor" :class="{ 'canvas-only-mode': isCanvasOnly }">
     <div class="top-toolbar row items-center no-wrap q-gutter-sm">
-      <q-btn flat dense icon="zoom_in" @click="zoomIn" />
-      <q-btn flat dense icon="zoom_out" @click="zoomOut" />
-      <q-btn flat dense icon="fit_screen" @click="fitView" />
+      <q-btn flat dense icon="zoom_in" @click="zoomIn">
+        <q-tooltip>放大画布</q-tooltip>
+      </q-btn>
+      <q-btn flat dense icon="zoom_out" @click="zoomOut">
+        <q-tooltip>缩小画布</q-tooltip>
+      </q-btn>
+      <q-btn flat dense icon="fit_screen" @click="fitView">
+        <q-tooltip>适配视图</q-tooltip>
+      </q-btn>
       <q-separator vertical inset />
-      <q-btn dense color="primary" icon="auto_fix_high" label="自动排布" :disable="readonly" @click="autoLayout" />
+      <q-btn dense color="primary" icon="auto_fix_high" label="自动排布" :disable="readonly" @click="autoLayout">
+        <q-tooltip>将节点按网格重新排布</q-tooltip>
+      </q-btn>
+      <q-btn-dropdown
+        v-if="isCanvasOnly && isCompleteFeature"
+        dense
+        color="primary"
+        icon="add_circle"
+        label="新增节点"
+        :disable="readonly || structureLocked"
+      >
+        <q-list dense style="min-width: 220px">
+          <q-item v-for="tpl in nodeTemplates" :key="`quick-add-${tpl.type}`" clickable v-close-popup @click="addNode(tpl)">
+            <q-item-section>{{ tpl.label }}</q-item-section>
+            <q-item-section side class="text-caption text-grey-6">{{ tpl.type }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-btn-dropdown>
+      <q-btn
+        v-if="isCanvasOnly && isCompleteFeature && selectedNode"
+        dense
+        flat
+        icon="edit_note"
+        label="编辑备注"
+        :disable="readonly || structureLocked"
+        @click="promptEditSelectedNodeRemark"
+      />
+      <q-btn
+        v-if="isCanvasOnly && isCompleteFeature && selectedNode"
+        dense
+        flat
+        color="negative"
+        icon="delete"
+        label="删除节点"
+        :disable="readonly || structureLocked"
+        @click="removeSelectedNode"
+      />
+      <q-btn
+        v-if="isCanvasOnly && isCompleteFeature && selectedEdge"
+        dense
+        flat
+        color="negative"
+        icon="link_off"
+        label="删除连线"
+        :disable="readonly || structureLocked"
+        @click="removeSelectedEdge"
+      />
+      <q-btn
+        v-if="isCanvasOnly"
+        dense
+        unelevated
+        color="positive"
+        icon="play_arrow"
+        label="运行草稿"
+        @click="emitRunFromCanvas"
+      />
       <q-space />
       <q-badge v-if="structureLocked" color="warning" text-color="dark">系统流程结构锁定</q-badge>
-      <q-badge color="grey-8">ComfyUI 风格蓝图编辑器</q-badge>
+      <q-badge color="teal-1" text-color="teal-10">{{ isCanvasOnly ? "画布模式" : "完整编辑器" }}</q-badge>
     </div>
 
     <div class="editor-main row no-wrap">
-      <aside class="left-panel">
+      <aside v-if="!isCanvasOnly" class="left-panel">
         <div class="panel-title">节点库</div>
         <q-banner v-if="structureLocked" dense rounded class="bg-grey-9 text-grey-4 q-mb-sm">
           系统流程不允许增删节点与连线。
@@ -21,7 +82,6 @@
           v-model="nodeSearch"
           dense
           outlined
-          dark
           placeholder="搜索节点"
           class="q-mb-sm"
         >
@@ -37,6 +97,7 @@
               :key="tpl.type"
               dense
               unelevated
+              icon="add_circle_outline"
               class="node-add-btn"
               :label="tpl.label"
               :disable="readonly || structureLocked"
@@ -69,83 +130,80 @@
           :max-zoom="2.5"
           @connect="onConnect"
           @node-click="onNodeClick"
+          @node-double-click="onNodeDoubleClick"
           @edge-click="onEdgeClick"
           @pane-click="clearSelection"
         >
-          <Background pattern-color="#374151" :gap="20" />
+          <Background :pattern-color="isCanvasOnly ? '#99d7cf' : '#8cc7be'" :gap="20" />
           <MiniMap pannable zoomable />
-          <Controls position="bottom-left" />
         </VueFlow>
+        <div v-if="!isCanvasOnly && (selectedNode || selectedEdge)" class="floating-inspector">
+          <div class="row items-center q-mb-sm">
+            <div class="panel-title no-margin">属性面板</div>
+            <q-space />
+            <q-btn flat dense round icon="close" @click="clearSelection" />
+          </div>
+
+          <template v-if="selectedNode">
+            <div class="text-subtitle2 text-grey-9">{{ selectedNodeDisplayTitle }}</div>
+            <div class="text-caption text-grey-7 q-mt-xs">类型: {{ selectedNode.data?.nodeType || "custom" }}</div>
+            <q-input
+              class="q-mt-sm"
+              dense
+              outlined
+              label="备注(可选)"
+              :disable="readonly || structureLocked"
+              :model-value="selectedNode.data?.remark || ''"
+              @update:model-value="updateSelectedNodeRemark"
+            />
+            <q-separator class="q-my-sm" />
+
+            <div class="text-caption text-grey-7">节点作用</div>
+            <div class="text-body2 text-grey-9 q-mt-xs">
+              {{ selectedNodeMacro?.summary || "该节点用于在流程中传递或处理数据。" }}
+            </div>
+
+            <div class="text-caption text-grey-7 q-mt-md">输入端点说明</div>
+            <div
+              v-for="input in selectedNodeInputsDoc"
+              :key="`doc-in-${input.name}`"
+              class="doc-row q-mt-xs"
+              :title="`${input.label} (${input.name})\n类型: ${input.typeText}\n${input.description}`"
+            >
+              <span class="doc-port">{{ input.label }}</span>
+              <span class="doc-desc">[{{ input.typeText }}] {{ input.description }}</span>
+            </div>
+
+            <div class="text-caption text-grey-7 q-mt-md">输出端点说明</div>
+            <div
+              v-for="output in selectedNodeOutputsDoc"
+              :key="`doc-out-${output.name}`"
+              class="doc-row q-mt-xs"
+              :title="`${output.label} (${output.name})\n类型: ${output.typeText}\n${output.description}`"
+            >
+              <span class="doc-port">{{ output.label }}</span>
+              <span class="doc-desc">[{{ output.typeText }}] {{ output.description }}</span>
+            </div>
+
+            <q-banner dense rounded class="bg-teal-1 text-teal-10 q-mt-md">
+              参数请直接在节点内部编辑（ComfyUI 风格）。
+            </q-banner>
+
+            <div class="row q-gutter-sm q-mt-sm">
+              <q-btn color="negative" flat dense label="删除节点" :disable="readonly || structureLocked" @click="removeSelectedNode" />
+            </div>
+          </template>
+
+          <template v-else-if="selectedEdge">
+            <div class="text-caption text-grey-7">连线：{{ selectedEdgeDisplayTitle }}</div>
+            <q-btn class="q-mt-sm" color="negative" flat dense label="删除连线" :disable="readonly || structureLocked" @click="removeSelectedEdge" />
+          </template>
+        </div>
       </main>
-
-      <aside class="right-panel">
-        <div class="panel-title">属性面板</div>
-
-        <template v-if="selectedNode">
-          <div class="text-subtitle2 text-grey-2">{{ selectedNodeDisplayTitle }}</div>
-          <div class="text-caption text-grey-5 q-mt-xs">类型: {{ selectedNode.data?.nodeType || "custom" }}</div>
-          <q-input
-            class="q-mt-sm"
-            dense
-            outlined
-            dark
-            label="备注(可选)"
-            :disable="readonly || structureLocked"
-            :model-value="selectedNode.data?.remark || ''"
-            @update:model-value="updateSelectedNodeRemark"
-          />
-          <q-separator class="q-my-sm" />
-
-          <div class="text-caption text-grey-4">节点作用</div>
-          <div class="text-body2 text-grey-2 q-mt-xs">
-            {{ selectedNodeMacro?.summary || "该节点用于在流程中传递或处理数据。" }}
-          </div>
-
-          <div class="text-caption text-grey-4 q-mt-md">输入端点说明</div>
-          <div
-            v-for="input in selectedNodeInputsDoc"
-            :key="`doc-in-${input.name}`"
-            class="doc-row q-mt-xs"
-            :title="`${input.label} (${input.name})\n类型: ${input.typeText}\n${input.description}`"
-          >
-            <span class="doc-port">{{ input.label }}</span>
-            <span class="doc-desc">[{{ input.typeText }}] {{ input.description }}</span>
-          </div>
-
-          <div class="text-caption text-grey-4 q-mt-md">输出端点说明</div>
-          <div
-            v-for="output in selectedNodeOutputsDoc"
-            :key="`doc-out-${output.name}`"
-            class="doc-row q-mt-xs"
-            :title="`${output.label} (${output.name})\n类型: ${output.typeText}\n${output.description}`"
-          >
-            <span class="doc-port">{{ output.label }}</span>
-            <span class="doc-desc">[{{ output.typeText }}] {{ output.description }}</span>
-          </div>
-
-          <q-banner dense rounded class="bg-grey-9 text-grey-4 q-mt-md">
-            参数请直接在节点内部编辑（ComfyUI 风格）。
-          </q-banner>
-
-          <div class="row q-gutter-sm q-mt-sm">
-            <q-btn color="negative" flat dense label="删除节点" :disable="readonly || structureLocked" @click="removeSelectedNode" />
-          </div>
-        </template>
-
-        <template v-else-if="selectedEdge">
-          <div class="text-caption text-grey-5">连线：{{ selectedEdgeDisplayTitle }}</div>
-          <q-btn class="q-mt-sm" color="negative" flat dense label="删除连线" :disable="readonly || structureLocked" @click="removeSelectedEdge" />
-        </template>
-
-        <template v-else>
-          <div class="text-caption text-grey-5">点击节点或连线后可编辑</div>
-        </template>
-
-        <q-banner v-if="errorMsg" dense rounded class="bg-negative text-white q-mt-sm">
-          {{ errorMsg }}
-        </q-banner>
-      </aside>
     </div>
+    <q-banner v-if="errorMsg" dense rounded class="bg-negative text-white q-ma-sm">
+      {{ errorMsg }}
+    </q-banner>
   </div>
 </template>
 
@@ -153,7 +211,6 @@
 import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ConnectionLineType, VueFlow, type Connection, type Edge, type Node } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
-import { Controls } from "@vue-flow/controls";
 import { MiniMap } from "@vue-flow/minimap";
 import { open as openDialog } from "src/tauri-compat/dialog";
 import {
@@ -198,16 +255,23 @@ const props = defineProps<{
   modelValue: WorkflowGraph;
   readonly?: boolean;
   structureLocked?: boolean;
+  canvasMode?: "full" | "canvas-only";
+  featureLevel?: "basic" | "complete";
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: WorkflowGraph];
+  "run-from-canvas": [];
+  "graph-dirty-change": [dirty: boolean];
 }>();
 
 const readonly = computed(() => props.readonly === true);
 const structureLocked = computed(() => props.structureLocked === true);
+const isCanvasOnly = computed(() => props.canvasMode === "canvas-only");
+const isCompleteFeature = computed(() => (props.featureLevel || "complete") === "complete");
 const nodeSearch = ref("");
 const errorMsg = ref("");
+const baselineGraphSnapshot = ref("");
 
 const flowRef = ref<InstanceType<typeof VueFlow> | null>(null);
 const flowNodes = ref<Array<Node<NodeData>>>([]);
@@ -753,6 +817,7 @@ function emitGraph() {
 
   lastGraphSnapshot = snapshot;
   emit("update:modelValue", graph);
+  emit("graph-dirty-change", snapshot !== baselineGraphSnapshot.value);
 }
 
 function clearSelection() {
@@ -762,6 +827,8 @@ function clearSelection() {
 
 function syncFromModel(graph: WorkflowGraph) {
   const canonicalGraph = canonicalizeGraphNodeIds(graph);
+  baselineGraphSnapshot.value = JSON.stringify(canonicalGraph);
+  emit("graph-dirty-change", false);
   syncingFromProps = true;
   flowNodes.value = (canonicalGraph.nodes || []).map((node, idx) => graphNodeToFlowNode(node, idx));
   flowEdges.value = (canonicalGraph.edges || []).map((edge) => ({
@@ -782,6 +849,21 @@ function syncFromModel(graph: WorkflowGraph) {
 function onNodeClick(event: { node: Node<NodeData> }) {
   selectedEdgeId.value = "";
   selectedNodeId.value = event.node.id;
+}
+
+function onNodeDoubleClick(event: { node: Node<NodeData> }) {
+  if (!isCanvasOnly.value || !isCompleteFeature.value || readonly.value || structureLocked.value) {
+    return;
+  }
+  const currentRemark = event.node.data?.remark || "";
+  const nextRemark = window.prompt("输入节点备注（可留空）", currentRemark);
+  if (nextRemark === null) {
+    return;
+  }
+  updateNodeData(event.node.id, (oldData) => ({
+    ...oldData,
+    remark: nextRemark.trim(),
+  }));
 }
 
 function onEdgeClick(event: { edge: Edge }) {
@@ -921,6 +1003,17 @@ function updateSelectedNodeRemark(value: string | number | null) {
   }));
 }
 
+function promptEditSelectedNodeRemark() {
+  if (!selectedNode.value) {
+    return;
+  }
+  onNodeDoubleClick({ node: selectedNode.value });
+}
+
+function emitRunFromCanvas() {
+  emit("run-from-canvas");
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element) {
@@ -1009,48 +1102,46 @@ onUnmounted(() => {
 <style scoped>
 .comfy-editor {
   min-height: 560px;
-  border: 1px solid #111827;
-  border-radius: 12px;
+  border: 1px solid rgba(5, 89, 83, 0.18);
+  border-radius: 16px;
   overflow: hidden;
-  background: #0b1220;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .top-toolbar {
   height: 46px;
   padding: 0 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-  background: #111827;
+  border-bottom: 1px solid rgba(5, 89, 83, 0.16);
+  background: rgba(236, 251, 249, 0.9);
 }
 
 .editor-main {
   min-height: 560px;
 }
 
-.left-panel,
-.right-panel {
+.left-panel {
   width: 260px;
   padding: 10px;
-  background: #111827;
-  border-right: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.right-panel {
-  width: 320px;
-  border-right: none;
-  border-left: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(245, 255, 254, 0.94);
+  border-right: 1px solid rgba(5, 89, 83, 0.12);
 }
 
 .panel-title {
-  color: #f3f4f6;
+  color: #0d4f4b;
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 10px;
 }
 
+.no-margin {
+  margin-bottom: 0;
+}
+
 .canvas-shell {
   flex: 1;
   min-width: 0;
-  background: #0f172a;
+  position: relative;
+  background: linear-gradient(160deg, rgba(232, 247, 245, 0.86), rgba(255, 252, 247, 0.84));
 }
 
 .workflow-flow {
@@ -1061,39 +1152,114 @@ onUnmounted(() => {
 
 .node-add-btn {
   justify-content: flex-start;
-  color: #e5e7eb;
-  background: rgba(55, 65, 81, 0.8);
+  color: #0a4a45;
+  background: rgba(21, 170, 152, 0.12);
+}
+
+.node-add-btn :deep(.q-btn__content) {
+  justify-content: flex-start;
+  width: 100%;
+  gap: 6px;
+}
+
+.floating-inspector {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  left: auto;
+  width: min(240px, calc(100% - 20px));
+  max-width: 240px;
+  max-height: 290px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(5, 89, 83, 0.2);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 20px rgba(13, 79, 75, 0.2);
+  z-index: 10;
+}
+
+.floating-inspector .panel-title {
+  font-size: 12px;
+}
+
+.floating-inspector :deep(.q-btn) {
+  min-height: 26px;
+  font-size: 11px;
+}
+
+.floating-inspector :deep(.q-field__control) {
+  min-height: 30px;
+}
+
+.floating-inspector :deep(.q-field__native),
+.floating-inspector :deep(.q-field__label) {
+  font-size: 11px;
+}
+
+.floating-inspector :deep(.q-banner) {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.floating-inspector :deep(.q-mb-sm) {
+  margin-bottom: 6px !important;
+}
+
+.floating-inspector :deep(.q-mt-sm) {
+  margin-top: 6px !important;
+}
+
+.floating-inspector :deep(.q-mt-md) {
+  margin-top: 8px !important;
+}
+
+.floating-inspector :deep(.q-my-sm) {
+  margin-top: 6px !important;
+  margin-bottom: 6px !important;
 }
 
 .doc-row {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
 }
 
 .doc-port {
-  min-width: 64px;
-  color: #fbbf24;
-  font-size: 12px;
+  min-width: 46px;
+  color: #0e9488;
+  font-size: 11px;
 }
 
 .doc-desc {
-  color: #d1d5db;
-  font-size: 12px;
-  line-height: 1.4;
+  color: #2f5f5c;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 :deep(.vue-flow__edge-path) {
-  stroke: #f59e0b;
+  stroke: #10a195;
   stroke-width: 2px;
 }
 
 :deep(.vue-flow__node.selected) {
-  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.7);
+  box-shadow: 0 0 0 2px rgba(16, 161, 149, 0.55);
   border-radius: 12px;
 }
 
 :deep(.vue-flow__background-pattern) {
   opacity: 0.36;
+}
+
+.canvas-only-mode {
+  min-height: 640px;
+}
+
+.canvas-only-mode .top-toolbar {
+  background: rgba(240, 255, 252, 0.95);
+}
+
+.canvas-only-mode .workflow-flow {
+  min-height: 640px;
 }
 </style>

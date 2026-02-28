@@ -1,180 +1,171 @@
 <template>
-  <q-layout view="hHh lpR fFf" class="editor-layout">
-    <q-header elevated class="bg-dark text-white">
-      <q-toolbar>
-        <q-btn flat dense round icon="arrow_back" @click="closeWindow">
-          <q-tooltip>关闭窗口</q-tooltip>
-        </q-btn>
-        <q-toolbar-title>
-          <div class="row items-center q-gutter-sm no-wrap">
-            <q-icon name="account_tree" />
-            <span>工作流编辑器</span>
-            <q-badge v-if="isReadonly" color="blue">内置只读</q-badge>
-            <q-badge v-else-if="isSystemWorkflow" color="amber-5" text-color="dark">内置流程(仅参数/位置)</q-badge>
-          </div>
-        </q-toolbar-title>
-        <q-btn flat dense icon="refresh" @click="reloadWorkflow">
-          <q-tooltip>刷新当前工作流</q-tooltip>
-        </q-btn>
-        <q-btn
-          v-if="isSystemWorkflow"
-          flat
-          dense
-          icon="restart_alt"
-          label="还原默认"
-          :disable="!currentWorkflowId"
-          @click="restoreDefaultWorkflow"
-        />
-        <q-btn flat dense icon="content_copy" label="另存为" @click="saveAsCopy" />
-        <q-btn color="positive" dense icon="play_arrow" label="运行" :disable="!currentWorkflowId" @click="handleRunWorkflow" />
-        <q-btn
-          color="primary"
-          dense
-          icon="save"
-          label="保存"
-          :disable="isReadonly"
-          @click="saveWorkflow"
-        />
-      </q-toolbar>
-    </q-header>
-    <q-page-container>
-      <q-page class="q-pa-md editor-page">
-        <q-card flat bordered class="q-pa-md q-mb-sm metadata-card">
-          <div class="row q-col-gutter-md">
-            <div class="col-12 col-md-5">
-              <q-input
-                v-model="form.name"
-                label="工作流名称"
-                outlined
-                :disable="isReadonly || isSystemWorkflow"
-                hint="名称不可重复（忽略大小写和首尾空格）"
-              />
-            </div>
-            <div class="col-12 col-md-7">
-              <q-input
-                v-model="form.description"
-                label="描述"
-                outlined
-                autogrow
-                :disable="isReadonly || isSystemWorkflow"
-              />
-            </div>
-          </div>
-          <q-banner v-if="errorMsg" class="bg-negative text-white q-mt-sm" rounded>
-            {{ errorMsg }}
-          </q-banner>
-        </q-card>
-        <q-card flat bordered class="metadata-card editor-content-card">
-          <q-tabs
-            v-model="editorTab"
-            dense
-            align="left"
-            active-color="amber-4"
-            indicator-color="amber-4"
-            class="text-grey-3"
-          >
-            <q-tab name="visual" icon="account_tree" label="流程图" />
-            <q-tab name="board" icon="view_week" label="表单看板" />
-            <q-tab name="code" icon="code" label="代码视图" />
-          </q-tabs>
-          <q-separator dark />
-          <q-tab-panels
-            v-model="editorTab"
-            animated
-            keep-alive
-            class="bg-transparent"
-          >
-            <q-tab-panel name="visual" class="q-pa-none">
-              <WorkflowBlueprintEditor
-                v-model="graphModel"
-                :readonly="isReadonly"
-                :structure-locked="isSystemWorkflow"
-              />
-            </q-tab-panel>
-            <q-tab-panel name="board" class="q-pa-sm">
-              <SystemWorkflowBoard
-                v-if="isSystemWorkflow"
-                :system-kind="currentWorkflowSystemKind"
-                :graph="graphModel"
-                :readonly="isReadonly"
-                @update-field="handleBoardFieldUpdate"
-                @pick-path="handleBoardPickPath"
-              />
-              <div v-else class="form-board">
-                <q-banner dense rounded class="bg-grey-9 text-grey-4 q-mb-md">
-                  表单看板仅展示配置卡片：必填项在上，可选项在中，有默认值项在下。
-                </q-banner>
-                <div v-for="section in boardSections" :key="section.key" class="q-mb-md">
-                  <div class="board-section-title">{{ section.title }}</div>
-                  <div class="board-card-grid">
-                    <BoardNodeCard
-                      v-for="card in section.cards"
-                      :key="`${section.key}-${card.nodeId}`"
-                      :card="card"
-                      :readonly="isReadonly"
-                      :config="readNodeConfig(card.nodeId)"
-                      @update-field="handleBoardFieldUpdate"
-                      @pick-path="handleBoardPickPath"
-                    />
-                    <q-card v-if="section.cards.length === 0" flat bordered class="board-empty-card">
-                      <q-card-section class="text-caption text-grey-5">{{ section.emptyText }}</q-card-section>
-                    </q-card>
-                  </div>
+  <AppDesktopShell title="工作流编辑器" :show-middle="false" :left-width="108">
+    <template #titlebar-left>
+      <WindowControls v-if="isMac" />
+    </template>
+    <template #titlebar-center>
+      <div class="editor-titlebar row items-center no-wrap">
+        <q-icon name="account_tree" size="18px" class="q-mr-xs" />
+        <span>工作流编辑器</span>
+        <q-badge v-if="isReadonly" color="blue-2" text-color="blue-10" class="q-ml-sm">内置只读</q-badge>
+        <q-badge v-else-if="isSystemWorkflow" color="amber-2" text-color="amber-10" class="q-ml-sm">内置流程(仅参数/位置)</q-badge>
+      </div>
+    </template>
+    <template #titlebar-right>
+      <WindowControls v-if="!isMac" />
+    </template>
+
+    <template #left>
+      <div class="editor-left column full-height">
+        <div class="editor-top-actions column q-gutter-sm">
+          <q-btn stack no-caps unelevated class="editor-menu-btn" :class="{ active: editorTab === 'visual' }" icon="account_tree" label="流程图" @click="editorTab = 'visual'" />
+          <q-btn stack no-caps unelevated class="editor-menu-btn" :class="{ active: editorTab === 'board' }" icon="view_week" label="表单看板" @click="editorTab = 'board'" />
+          <q-btn stack no-caps unelevated class="editor-menu-btn" :class="{ active: editorTab === 'code' }" icon="code" label="代码视图" @click="editorTab = 'code'" />
+          <q-btn stack no-caps unelevated class="editor-menu-btn" :class="{ active: editorTab === 'settings' }" icon="tune" label="工作流设置" @click="editorTab = 'settings'" />
+        </div>
+
+        <q-space />
+
+        <div class="editor-bottom-actions column q-gutter-sm">
+          <q-btn no-caps unelevated class="editor-action-btn" color="positive" icon="play_arrow" label="运行" :disable="!currentWorkflowId" @click="handleRunWorkflow" />
+          <q-btn no-caps unelevated class="editor-action-btn" color="primary" icon="save" label="保存" :disable="isReadonly" @click="saveWorkflow" />
+          <q-btn no-caps unelevated class="editor-action-btn" color="orange-7" text-color="white" icon="content_copy" label="另存为" @click="saveAsCopy" />
+        </div>
+      </div>
+    </template>
+
+    <template #right>
+      <div class="editor-right q-pa-md">
+        <q-banner v-if="errorMsg" class="bg-negative text-white q-mb-sm" rounded>
+          {{ errorMsg }}
+        </q-banner>
+
+        <div v-if="editorTab === 'visual'" class="right-panel-wrap">
+          <WorkflowBlueprintEditor
+            v-model="graphModel"
+            :readonly="isReadonly"
+            :structure-locked="isSystemWorkflow"
+            canvas-mode="full"
+            feature-level="complete"
+          />
+        </div>
+
+        <div v-else-if="editorTab === 'board'" class="right-panel-wrap">
+          <q-scroll-area class="editor-scroll-panel">
+            <SystemWorkflowBoard
+              v-if="isSystemWorkflow"
+              :system-kind="currentWorkflowSystemKind"
+              :graph="graphModel"
+              :readonly="isReadonly"
+              @update-field="handleBoardFieldUpdate"
+              @pick-path="handleBoardPickPath"
+            />
+            <div v-else class="form-board q-pr-sm">
+              <q-banner dense rounded class="bg-cyan-1 text-cyan-10 q-mb-md">
+                表单看板按优先级分组展示配置。
+              </q-banner>
+              <div v-for="section in boardSections" :key="section.key" class="q-mb-md">
+                <div class="board-section-title">{{ section.title }}</div>
+                <div class="board-card-grid">
+                  <BoardNodeCard
+                    v-for="card in section.cards"
+                    :key="`${section.key}-${card.nodeId}`"
+                    :card="card"
+                    :readonly="isReadonly"
+                    :config="readNodeConfig(card.nodeId)"
+                    @update-field="handleBoardFieldUpdate"
+                    @pick-path="handleBoardPickPath"
+                  />
+                  <q-card v-if="section.cards.length === 0" flat bordered class="board-empty-card">
+                    <q-card-section class="text-caption text-grey-7">{{ section.emptyText }}</q-card-section>
+                  </q-card>
                 </div>
               </div>
-            </q-tab-panel>
-            <q-tab-panel name="code" class="q-pa-sm">
-              <div class="row items-center q-gutter-sm q-mb-sm">
-                <q-btn dense flat icon="sync" label="从流程图生成" @click="syncCodeFromCanvas" />
-                <q-btn
-                  dense
-                  color="primary"
-                  icon="published_with_changes"
-                  label="应用到流程图"
-                  :disable="isReadonly || isSystemWorkflow"
-                  @click="applyCodeToCanvas"
-                />
-                <q-space />
-                <q-btn dense flat icon="content_paste" label="粘贴" :disable="isReadonly || isSystemWorkflow" @click="pasteCodeFromClipboard" />
-                <q-btn dense color="positive" icon="content_copy" label="复制代码" @click="copyCode" />
+            </div>
+          </q-scroll-area>
+        </div>
+
+        <div v-else-if="editorTab === 'code'" class="right-panel-wrap">
+          <div class="row items-center q-gutter-sm q-mb-sm">
+            <q-btn dense flat icon="sync" label="从流程图生成" @click="syncCodeFromCanvas" />
+            <q-btn
+              dense
+              color="primary"
+              icon="published_with_changes"
+              label="应用到流程图"
+              :disable="isReadonly || isSystemWorkflow"
+              @click="applyCodeToCanvas"
+            />
+            <q-space />
+            <q-btn dense flat icon="content_paste" label="粘贴" :disable="isReadonly || isSystemWorkflow" @click="pasteCodeFromClipboard" />
+            <q-btn dense color="positive" icon="content_copy" label="复制代码" @click="copyCode" />
+          </div>
+          <q-scroll-area class="editor-scroll-panel">
+            <q-input
+              v-model="workflowCodeText"
+              type="textarea"
+              outlined
+              :disable="isReadonly || isSystemWorkflow"
+              input-style="font-family: Menlo, Monaco, Consolas, monospace; min-height: 780px;"
+              class="q-pr-sm"
+              @update:model-value="onCodeTextChange"
+            />
+          </q-scroll-area>
+        </div>
+
+        <div v-else class="right-panel-wrap">
+          <q-scroll-area class="editor-scroll-panel">
+            <q-card flat bordered class="settings-card q-pa-md q-pr-sm">
+              <div class="row q-col-gutter-md">
+                <div class="col-12 col-md-5">
+                  <q-input
+                    v-model="form.name"
+                    label="工作流名称"
+                    outlined
+                    :disable="isReadonly || isSystemWorkflow"
+                    hint="名称不可重复（忽略大小写和首尾空格）"
+                  />
+                </div>
+                <div class="col-12 col-md-7">
+                  <q-input
+                    v-model="form.description"
+                    label="描述"
+                    outlined
+                    autogrow
+                    :disable="isReadonly || isSystemWorkflow"
+                  />
+                </div>
               </div>
-              <q-input
-                v-model="workflowCodeText"
-                type="textarea"
-                autogrow
-                outlined
-                dark
-                :disable="isReadonly || isSystemWorkflow"
-                input-style="font-family: Menlo, Monaco, Consolas, monospace; min-height: 520px;"
-                @update:model-value="onCodeTextChange"
-              />
-            </q-tab-panel>
-          </q-tab-panels>
-        </q-card>
-      </q-page>
-    </q-page-container>
-  </q-layout>
+            </q-card>
+          </q-scroll-area>
+        </div>
+      </div>
+    </template>
+  </AppDesktopShell>
 </template>
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { copyToClipboard } from "quasar";
+import { copyToClipboard, useQuasar } from "quasar";
 import { useRoute, useRouter } from "vue-router";
 import {
   createWorkflow,
   duplicateWorkflow,
   getWorkflow,
-  restoreWorkflowDefault,
   runWorkflow as runWorkflowApi,
   updateWorkflow,
   validateWorkflowGraph,
 } from "src/api/workflow-api";
 import { openTaskInMain } from "src/tauri-compat/core";
 import { open as openDialog } from "src/tauri-compat/dialog";
+import AppDesktopShell from "src/components/shell/AppDesktopShell.vue";
+import WindowControls from "src/components/shell/WindowControls.vue";
 import WorkflowBlueprintEditor from "src/components/workflow/WorkflowBlueprintEditor.vue";
 import BoardNodeCard from "src/components/workflow/board/BoardNodeCard.vue";
 import SystemWorkflowBoard from "src/components/workflow/board/SystemWorkflowBoard.vue";
 import type { BuiltinWorkflowKind, WorkflowGraph, WorkflowSource } from "src/components/workflow/types";
 import { useWorkflowBoard } from "./workflow-editor/use-workflow-board";
+const $q = useQuasar();
+const isMac = $q.platform.is.mac;
 const route = useRoute();
 const router = useRouter();
 const form = reactive({
@@ -190,7 +181,7 @@ const currentWorkflowId = ref("");
 const currentWorkflowSource = ref<WorkflowSource>("user");
 const currentWorkflowSystemKind = ref<BuiltinWorkflowKind>("custom");
 const isReadonly = ref(false);
-const editorTab = ref<"visual" | "board" | "code">("visual");
+const editorTab = ref<"visual" | "board" | "code" | "settings">("visual");
 const workflowCodeText = ref("");
 const codeDirty = ref(false);
 const isSystemWorkflow = computed(() => currentWorkflowSource.value === "system");
@@ -421,18 +412,6 @@ async function reloadWorkflow() {
     errorMsg.value = String(error);
   }
 }
-async function restoreDefaultWorkflow() {
-  if (!currentWorkflowId.value || !isSystemWorkflow.value) {
-    return;
-  }
-  errorMsg.value = "";
-  try {
-    await restoreWorkflowDefault(currentWorkflowId.value);
-    await reloadWorkflow();
-  } catch (error) {
-    errorMsg.value = String(error);
-  }
-}
 async function saveWorkflow() {
   if (isReadonly.value) {
     errorMsg.value = "内置工作流不可直接编辑，请使用另存为";
@@ -538,39 +517,123 @@ watch(
 );
 </script>
 <style scoped>
-.editor-layout {
-  background: #0b1220;
+.editor-titlebar {
+  color: #0d4f4b;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
 }
-.editor-page {
-  min-height: calc(100vh - 52px);
+
+.editor-left {
+  padding: 2px;
 }
-.metadata-card {
-  background: #111827;
-  color: #e5e7eb;
+
+.editor-top-actions,
+.editor-bottom-actions {
+  width: 100%;
+  padding: 6px 4px;
 }
-.editor-content-card {
+
+.editor-menu-btn {
+  min-height: 66px;
+  width: 100%;
+  border-radius: 12px;
+  background: rgba(21, 170, 152, 0.12);
+  color: #0a4a45;
+}
+
+.editor-menu-btn :deep(.q-btn__content) {
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+}
+
+.editor-menu-btn :deep(.q-icon) {
+  font-size: 18px;
+}
+
+.editor-menu-btn :deep(.q-btn__content .block) {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.05;
+  white-space: nowrap;
+  padding: 0;
+}
+
+.editor-menu-btn.active {
+  background: linear-gradient(140deg, #17a79a, #ff7c5c);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(23, 167, 154, 0.3);
+}
+
+.editor-action-btn {
+  width: 100%;
+}
+
+.editor-action-btn :deep(.q-btn__content) {
+  justify-content: center !important;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.editor-action-btn :deep(.q-btn__content .block) {
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.editor-action-btn :deep(.q-icon.on-left) {
+  margin-right: 4px;
+  font-size: 17px;
+}
+
+.editor-right {
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
-:deep(.q-tab-panel) {
-  background: transparent;
+
+.right-panel-wrap {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
+
+.editor-scroll-panel {
+  height: 100%;
+  min-height: 0;
+}
+
 .form-board {
-  min-height: 540px;
+  min-height: 620px;
 }
+
 .board-section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: #0d4f4b;
   margin-bottom: 10px;
 }
+
 .board-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
 }
+
 .board-empty-card {
-  background: #0f172a;
-  border-color: #243043;
-  color: #e5e7eb;
+  background: rgba(240, 255, 252, 0.8);
+  border-color: rgba(10, 74, 69, 0.16);
+  color: #355f5a;
+}
+
+.settings-card {
+  border-radius: 16px;
+  border-color: rgba(10, 74, 69, 0.15);
+  background: rgba(255, 255, 255, 0.84);
 }
 </style>

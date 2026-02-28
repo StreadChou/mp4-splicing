@@ -24,6 +24,22 @@ export async function openTaskInMain(taskId: string): Promise<boolean> {
   return window.mp4handler.openTaskInMain(taskId);
 }
 
+export async function windowMinimize(): Promise<boolean> {
+  return window.mp4handler.windowMinimize();
+}
+
+export async function windowToggleMaximize(): Promise<boolean> {
+  return window.mp4handler.windowToggleMaximize();
+}
+
+export async function windowClose(): Promise<boolean> {
+  return window.mp4handler.windowClose();
+}
+
+export async function windowIsMaximized(): Promise<boolean> {
+  return window.mp4handler.windowIsMaximized();
+}
+
 function encodeLocalPath(filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
   const withLeadingSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;

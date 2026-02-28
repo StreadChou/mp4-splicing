@@ -271,7 +271,7 @@ function handleStyle(topPercent: number, color: string): Record<string, string> 
   return {
     width: "10px",
     height: "10px",
-    border: "1px solid #111827",
+    border: "1px solid #0b6a62",
     background: color,
     top: `${topPercent}%`,
   };
@@ -302,33 +302,33 @@ const configPreview = computed(() => {
 .comfy-node {
   min-width: 280px;
   max-width: 380px;
-  border: 1px solid #111827;
+  border: 1px solid rgba(10, 74, 69, 0.2);
   border-radius: 10px;
-  background: #1f2937;
-  color: #e5e7eb;
-  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.92);
+  color: #15423f;
+  box-shadow: 0 10px 18px rgba(13, 79, 75, 0.14);
 }
 
 .node-title {
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  border-bottom: 1px solid rgba(10, 74, 69, 0.16);
   display: flex;
   align-items: center;
-  background: linear-gradient(90deg, #111827 0%, #1f2937 70%);
+  background: linear-gradient(90deg, rgba(23, 167, 154, 0.18) 0%, rgba(255, 124, 92, 0.18) 100%);
   border-radius: 10px 10px 0 0;
 }
 
 .node-subtitle {
   padding: 4px 10px;
   font-size: 11px;
-  color: #9ca3af;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  color: #4b807b;
+  border-bottom: 1px solid rgba(10, 74, 69, 0.12);
 }
 
 .node-name {
   font-weight: 700;
   font-size: 14px;
-  color: #f3f4f6;
+  color: #0d4f4b;
 }
 
 .node-body {
@@ -352,7 +352,7 @@ const configPreview = computed(() => {
   position: relative;
   min-height: 18px;
   font-size: 12px;
-  color: #d1d5db;
+  color: #2e6560;
   padding: 0 8px;
   display: flex;
   align-items: center;
@@ -369,9 +369,9 @@ const configPreview = computed(() => {
 .node-widgets {
   margin: 0 8px 8px;
   padding: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(10, 74, 69, 0.14);
   border-radius: 8px;
-  background: rgba(17, 24, 39, 0.45);
+  background: rgba(236, 251, 249, 0.92);
 }
 
 .widget-row {
@@ -382,13 +382,13 @@ const configPreview = computed(() => {
   display: block;
   margin-bottom: 3px;
   font-size: 11px;
-  color: #9ca3af;
+  color: #4b807b;
 }
 
 .widget-help {
   margin-top: 4px;
   font-size: 11px;
-  color: #94a3b8;
+  color: #628d88;
 }
 
 .widget-inline {
@@ -400,10 +400,10 @@ const configPreview = computed(() => {
 .widget-select,
 .widget-textarea {
   width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.45);
+  border: 1px solid rgba(10, 74, 69, 0.28);
   border-radius: 6px;
-  background: #0f172a;
-  color: #e5e7eb;
+  background: #f8fffd;
+  color: #12423f;
   padding: 4px 6px;
   font-size: 12px;
 }
@@ -415,10 +415,10 @@ const configPreview = computed(() => {
 
 .widget-btn {
   min-width: 28px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
+  border: 1px solid rgba(10, 74, 69, 0.28);
   border-radius: 6px;
-  background: #1e293b;
-  color: #e5e7eb;
+  background: #e8f7f5;
+  color: #0d4f4b;
   font-size: 12px;
 }
 
@@ -427,14 +427,14 @@ const configPreview = computed(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #cbd5e1;
+  color: #315f5a;
 }
 
 .node-config {
   padding: 0 10px 9px;
   font-size: 11px;
-  color: #94a3b8;
-  border-top: 1px dashed rgba(148, 163, 184, 0.28);
+  color: #5f8d88;
+  border-top: 1px dashed rgba(10, 74, 69, 0.2);
   margin-top: 2px;
   padding-top: 8px;
   white-space: nowrap;
