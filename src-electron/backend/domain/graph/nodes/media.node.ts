@@ -45,6 +45,49 @@ function readLoopRunTimes(payload: Record<string, unknown>, task: WorkflowTaskRe
   return Math.max(1, raw || 1);
 }
 
+function readRandomCountRange(
+  payload: Record<string, unknown>,
+  config: Record<string, unknown>,
+  runtimeInput: Record<string, unknown>,
+  totalFiles: number,
+): { min: number; max: number; usingAll: boolean; swapped: boolean } {
+  const minRaw = Math.round(
+    asNumber(payload.randomCountMin ?? config.randomCountMin ?? runtimeInput.randomCountMin ?? 2),
+  );
+  const maxRaw = Math.round(
+    asNumber(payload.randomCountMax ?? config.randomCountMax ?? runtimeInput.randomCountMax ?? 4),
+  );
+
+  if (minRaw === -1 || maxRaw === -1) {
+    return {
+      min: totalFiles,
+      max: totalFiles,
+      usingAll: true,
+      swapped: false,
+    };
+  }
+
+  if (minRaw <= 0 || maxRaw <= 0) {
+    throw new Error("节点视频选择数量必须大于 0，或使用 -1 表示全部");
+  }
+
+  if (minRaw <= maxRaw) {
+    return {
+      min: minRaw,
+      max: maxRaw,
+      usingAll: false,
+      swapped: false,
+    };
+  }
+
+  return {
+    min: maxRaw,
+    max: minRaw,
+    usingAll: false,
+    swapped: true,
+  };
+}
+
 export async function executeSelectVideoNode(
   task: WorkflowTaskRecord,
   node: WorkflowGraphNode,
@@ -100,6 +143,34 @@ export async function executeComposeVideosNode(
 
   const runTimes = readLoopRunTimes(payload, task);
   const shuffle = asBoolean(payload.shuffle ?? config.shuffle ?? task.runtimeInput.shuffle ?? false);
+  const randomRange = readRandomCountRange(payload, config, task.runtimeInput, files.length);
+
+  if (randomRange.usingAll) {
+    await deps.appendTaskLog(task.id, "视频选择数量为 -1，当前将使用全部候选视频参与拼接", "info", {
+      nodeId: node.id,
+      nodeLabel: getGraphNodeLabel(node),
+    });
+  } else if (randomRange.swapped) {
+    await deps.appendTaskLog(
+      task.id,
+      `最少选择数量大于最多选择数量，已自动纠正为 ${String(randomRange.min)}-${String(randomRange.max)}`,
+      "warn",
+      {
+        nodeId: node.id,
+        nodeLabel: getGraphNodeLabel(node),
+      },
+    );
+  } else if (randomRange.max > files.length) {
+    await deps.appendTaskLog(
+      task.id,
+      `候选视频仅 ${String(files.length)} 条，若随机命中更大数量将自动回退为全部候选视频`,
+      "warn",
+      {
+        nodeId: node.id,
+        nodeLabel: getGraphNodeLabel(node),
+      },
+    );
+  }
 
   const startVideo = pickSinglePath(
     payload.startVideo,
@@ -123,8 +194,8 @@ export async function executeComposeVideosNode(
     files,
     startingVideo: startVideo || null,
     endingVideo: endVideo || null,
-    randomCountMin: files.length,
-    randomCountMax: files.length,
+    randomCountMin: randomRange.min,
+    randomCountMax: randomRange.max,
     maxDepth: 0,
     runTimes,
     outputDir,

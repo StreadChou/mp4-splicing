@@ -61,6 +61,26 @@ export const COMPOSE_VIDEOS_NODE: NodeDefinition = {
   ],
   fields: [
     {
+      key: "randomCountMin",
+      label: "最少选择数量",
+      type: NodeFieldType.NUMBER,
+      required: false,
+      defaultValue: 2,
+      min: -1,
+      step: 1,
+      helpText: "-1 表示使用全部视频",
+    },
+    {
+      key: "randomCountMax",
+      label: "最多选择数量",
+      type: NodeFieldType.NUMBER,
+      required: false,
+      defaultValue: 4,
+      min: -1,
+      step: 1,
+      helpText: "-1 表示使用全部视频",
+    },
+    {
       key: "shuffle",
       label: "随机打乱",
       type: NodeFieldType.BOOLEAN,
@@ -69,6 +89,8 @@ export const COMPOSE_VIDEOS_NODE: NodeDefinition = {
     },
   ],
   defaults: {
+    randomCountMin: 2,
+    randomCountMax: 4,
     shuffle: false,
   },
   runtime: {

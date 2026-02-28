@@ -137,7 +137,9 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             type: "compose_videos",
             remark: "组合输出视频",
             config: {
-              shuffle: false,
+              randomCountMin: 2,
+              randomCountMax: 4,
+              shuffle: true,
             },
             position: { x: 1400, y: 320 },
           },
@@ -425,6 +427,8 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             type: "compose_videos",
             remark: "组合拆解片段",
             config: {
+              randomCountMin: 2,
+              randomCountMax: 4,
               shuffle: true,
             },
             position: { x: 2720, y: 360 },
