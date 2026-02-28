@@ -21,7 +21,7 @@
           <div
             v-for="field in section.fields"
             :key="field.id"
-            :class="field.fullWidth === true ? 'col-12' : 'col-12 col-md-6'"
+            :class="field.fullWidth === true ? 'col-12' : field.inlinePair === true ? 'col-6' : 'col-12 col-md-6'"
           >
             <q-input
               v-if="field.kind === 'text' || field.kind === 'directory' || field.kind === 'video'"
@@ -58,6 +58,7 @@
               v-else-if="field.kind === 'textarea'"
               :label="field.label"
               type="textarea"
+              :rows="field.rows || 4"
               autogrow
               outlined
               :disable="readonly"
@@ -139,7 +140,10 @@ interface SystemBoardFieldSchema {
   kind: FieldKind;
   node: NodeMatch;
   key: string;
+  derived?: "drop_head_tail_mode";
+  inlinePair?: boolean;
   fullWidth?: boolean;
+  rows?: number;
   placeholder?: string;
   helpText?: string;
   defaultValue?: unknown;
@@ -274,26 +278,8 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
       title: "2. 拼接设置",
       fields: [
         {
-          id: "concat_recursive",
-          label: "递归扫描子目录",
-          kind: "boolean",
-          node: { type: "read_mp4_files", remark: "扫描MP4文件" },
-          key: "recursive",
-          defaultValue: true,
-        },
-        {
-          id: "concat_depth",
-          label: "最大扫描深度",
-          kind: "number",
-          node: { type: "read_mp4_files", remark: "扫描MP4文件" },
-          key: "maxDepth",
-          defaultValue: 2,
-          min: 0,
-          step: 1,
-        },
-        {
           id: "concat_times",
-          label: "生成次数",
+          label: "最终生成视频数量",
           kind: "number",
           node: { type: "repeat", remark: "循环生成次数" },
           key: "times",
@@ -302,29 +288,12 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           step: 1,
         },
         {
-          id: "concat_concurrency",
-          label: "循环并发数量",
-          kind: "number",
-          node: { type: "repeat", remark: "循环生成次数" },
-          key: "concurrency",
-          defaultValue: 1,
-          min: 1,
-          step: 1,
-        },
-        {
-          id: "concat_shuffle",
-          label: "随机打乱顺序",
-          kind: "boolean",
-          node: { type: "compose_videos", remark: "组合输出视频" },
-          key: "shuffle",
-          defaultValue: true,
-        },
-        {
           id: "concat_random_min",
-          label: "最少选择视频数",
+          label: "最少选择视频片段数",
           kind: "number",
           node: { type: "compose_videos", remark: "组合输出视频" },
           key: "randomCountMin",
+          inlinePair: true,
           defaultValue: 2,
           min: -1,
           step: 1,
@@ -332,21 +301,15 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
         },
         {
           id: "concat_random_max",
-          label: "最多选择视频数",
+          label: "最多选择视频片段数",
           kind: "number",
           node: { type: "compose_videos", remark: "组合输出视频" },
           key: "randomCountMax",
+          inlinePair: true,
           defaultValue: 4,
           min: -1,
           step: 1,
           helpText: "-1 表示使用全部候选视频",
-        },
-        {
-          id: "concat_start",
-          label: "固定开头视频(可选)",
-          kind: "video",
-          node: { type: "select_video", remark: "可选固定开头" },
-          key: "videoPath",
         },
         {
           id: "concat_end",
@@ -365,76 +328,21 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
       fields: [
         {
           id: "auto_input",
-          label: "待拆解目录",
+          label: "输入目录",
           kind: "directory",
           node: { type: "input_dir", remark: "待拆解目录" },
           key: "inputDir",
         },
         {
           id: "auto_output",
-          label: "拆解输出目录",
+          label: "输出目录",
           kind: "directory",
           node: { type: "output_dir", remark: "拆解输出目录" },
           key: "outputDir",
         },
-      ],
-    },
-    {
-      key: "split",
-      title: "2. 拆解参数",
-      fields: [
-        {
-          id: "auto_recursive",
-          label: "递归扫描子目录",
-          kind: "boolean",
-          node: { type: "read_mp4_files", remark: "扫描要拆解的视频" },
-          key: "recursive",
-          defaultValue: true,
-        },
-        {
-          id: "auto_depth",
-          label: "最大扫描深度",
-          kind: "number",
-          node: { type: "read_mp4_files", remark: "扫描要拆解的视频" },
-          key: "maxDepth",
-          defaultValue: 2,
-          min: 0,
-          step: 1,
-        },
-        {
-          id: "auto_concurrency",
-          label: "处理并发数量",
-          kind: "number",
-          node: { type: "iterate", remark: "逐个视频拆解" },
-          key: "concurrency",
-          defaultValue: 2,
-          min: 1,
-          step: 1,
-        },
-        {
-          id: "auto_threshold",
-          label: "场景切换阈值",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "threshold",
-          defaultValue: 0.7,
-          min: 0,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          id: "auto_min_duration",
-          label: "最短片段时长(秒)",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "minDuration",
-          defaultValue: 2,
-          min: 0.1,
-          step: 0.1,
-        },
         {
           id: "auto_drop_head",
-          label: "丢弃开头片段",
+          label: "丢弃原视频片头",
           kind: "boolean",
           node: { type: "auto_split", remark: "执行自动拆解" },
           key: "dropHead",
@@ -442,7 +350,7 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
         },
         {
           id: "auto_drop_tail",
-          label: "丢弃结尾片段",
+          label: "丢弃原视频片尾",
           kind: "boolean",
           node: { type: "auto_split", remark: "执行自动拆解" },
           key: "dropTail",
@@ -454,81 +362,56 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
   auto_split_concat: [
     {
       key: "dirs",
-      title: "1. 输入与输出",
+      title: "1. 目录设置",
       fields: [
         {
           id: "asc_input",
-          label: "原始视频目录",
+          label: "输入目录",
           kind: "directory",
           node: { type: "input_dir", remark: "原始视频目录" },
           key: "inputDir",
         },
         {
-          id: "asc_split_output",
-          label: "拆解片段目录",
-          kind: "directory",
-          node: { type: "output_dir", remark: "拆解片段目录" },
-          key: "outputDir",
-        },
-        {
           id: "asc_concat_output",
-          label: "组合输出目录",
+          label: "输出目录",
           kind: "directory",
           node: { type: "output_dir", remark: "组合输出目录" },
           key: "outputDir",
         },
-      ],
-    },
-    {
-      key: "split",
-      title: "2. 拆解设置",
-      fields: [
         {
-          id: "asc_threshold",
-          label: "场景切换阈值",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "threshold",
-          defaultValue: 0.7,
-          min: 0,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          id: "asc_min_duration",
-          label: "最短片段时长(秒)",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "minDuration",
-          defaultValue: 2,
-          min: 0.1,
-          step: 0.1,
-        },
-        {
-          id: "asc_drop_head",
-          label: "丢弃开头片段",
-          kind: "boolean",
-          node: { type: "auto_split", remark: "按单视频自动拆解" },
-          key: "dropHead",
-          defaultValue: false,
-        },
-        {
-          id: "asc_drop_tail",
-          label: "丢弃结尾片段",
-          kind: "boolean",
-          node: { type: "auto_split", remark: "按单视频自动拆解" },
-          key: "dropTail",
-          defaultValue: false,
+          id: "asc_split_output",
+          label: "拆解临时存储目录",
+          kind: "directory",
+          node: { type: "output_dir", remark: "拆解片段目录" },
+          key: "outputDir",
         },
       ],
     },
     {
       key: "compose",
-      title: "3. 组合设置",
+      title: "2. 自动拆解并拼接设置",
       fields: [
         {
+          id: "asc_drop_head",
+          label: "自动拆解丢弃片头",
+          kind: "boolean",
+          node: { type: "auto_split", remark: "按单视频自动拆解" },
+          key: "dropHead",
+          inlinePair: true,
+          defaultValue: false,
+        },
+        {
+          id: "asc_drop_tail",
+          label: "自动拆解丢弃片尾",
+          kind: "boolean",
+          node: { type: "auto_split", remark: "按单视频自动拆解" },
+          key: "dropTail",
+          inlinePair: true,
+          defaultValue: false,
+        },
+        {
           id: "asc_times",
-          label: "生成次数",
+          label: "最终生成视频数量",
           kind: "number",
           node: { type: "repeat", remark: "循环组合次数" },
           key: "times",
@@ -537,26 +420,8 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           step: 1,
         },
         {
-          id: "asc_concurrency",
-          label: "组合并发数量",
-          kind: "number",
-          node: { type: "repeat", remark: "循环组合次数" },
-          key: "concurrency",
-          defaultValue: 1,
-          min: 1,
-          step: 1,
-        },
-        {
-          id: "asc_shuffle",
-          label: "组合前打乱顺序",
-          kind: "boolean",
-          node: { type: "compose_videos", remark: "组合拆解片段" },
-          key: "shuffle",
-          defaultValue: true,
-        },
-        {
           id: "asc_random_min",
-          label: "最少选择视频数",
+          label: "重组合使用视频片段数量最小值",
           kind: "number",
           node: { type: "compose_videos", remark: "组合拆解片段" },
           key: "randomCountMin",
@@ -567,7 +432,7 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
         },
         {
           id: "asc_random_max",
-          label: "最多选择视频数",
+          label: "重组合使用视频片段数量最大值",
           kind: "number",
           node: { type: "compose_videos", remark: "组合拆解片段" },
           key: "randomCountMax",
@@ -578,14 +443,14 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
         },
         {
           id: "asc_start",
-          label: "固定开头视频(可选)",
+          label: "自定义片头(可选)",
           kind: "video",
           node: { type: "select_video", remark: "可选固定开头" },
           key: "videoPath",
         },
         {
           id: "asc_end",
-          label: "固定结尾视频(可选)",
+          label: "自定义片尾(可选)",
           kind: "video",
           node: { type: "select_video", remark: "可选固定结尾" },
           key: "videoPath",
@@ -595,8 +460,8 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
   ],
   download_auto_split: [
     {
-      key: "download_input",
-      title: "1. 下载配置",
+      key: "download_auto_split_simple",
+      title: "下载并自动拆解",
       fields: [
         {
           id: "das_text",
@@ -604,59 +469,25 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           kind: "textarea",
           node: { type: "user_input", remark: "下载文本输入" },
           key: "text",
+          rows: 5,
+          fullWidth: true,
           placeholder: "每行一个 URL",
         },
-        ...COMMON_TEXT_SPLIT_FIELDS,
         {
           id: "das_output",
           label: "下载输出目录",
           kind: "directory",
           node: { type: "output_dir", remark: "下载输出目录" },
           key: "outputDir",
+          fullWidth: true,
         },
-        {
-          id: "das_download_concurrency",
-          label: "下载并发数量",
-          kind: "number",
-          node: { type: "iterate", remark: "逐条遍历下载项" },
-          key: "concurrency",
-          defaultValue: 3,
-          min: 1,
-          step: 1,
-        },
-      ],
-    },
-    {
-      key: "download_split",
-      title: "2. 下载后拆解",
-      fields: [
         {
           id: "das_split_output",
           label: "拆解输出目录",
           kind: "directory",
           node: { type: "output_dir", remark: "拆解输出目录" },
           key: "outputDir",
-        },
-        {
-          id: "das_threshold",
-          label: "场景切换阈值",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "threshold",
-          defaultValue: 0.7,
-          min: 0,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          id: "das_min_duration",
-          label: "最短片段时长(秒)",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "minDuration",
-          defaultValue: 2,
-          min: 0.1,
-          step: 0.1,
+          fullWidth: true,
         },
         {
           id: "das_drop_head",
@@ -664,6 +495,7 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           kind: "boolean",
           node: { type: "auto_split", remark: "下载后自动拆解" },
           key: "dropHead",
+          inlinePair: true,
           defaultValue: false,
         },
         {
@@ -672,6 +504,7 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           kind: "boolean",
           node: { type: "auto_split", remark: "下载后自动拆解" },
           key: "dropTail",
+          inlinePair: true,
           defaultValue: false,
         },
       ],
@@ -691,7 +524,7 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
         },
         {
           id: "re_output",
-          label: "去尾输出目录",
+          label: "最终视频输出目录",
           kind: "directory",
           node: { type: "output_dir", remark: "去尾输出目录" },
           key: "outputDir",
@@ -703,50 +536,21 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
       title: "2. 去尾参数",
       fields: [
         {
-          id: "re_concurrency",
-          label: "处理并发数量",
-          kind: "number",
-          node: { type: "iterate", remark: "逐个视频处理" },
-          key: "concurrency",
-          defaultValue: 2,
-          min: 1,
-          step: 1,
-        },
-        {
-          id: "re_threshold",
-          label: "场景切换阈值",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "threshold",
-          defaultValue: 0.7,
-          min: 0,
-          max: 1,
-          step: 0.01,
-        },
-        {
-          id: "re_min_duration",
-          label: "最短片段时长(秒)",
-          kind: "number",
-          node: { type: "split_algo_ssim", remark: "拆解算法配置" },
-          key: "minDuration",
-          defaultValue: 2,
-          min: 0.1,
-          step: 0.1,
-        },
-        {
           id: "re_drop_head",
-          label: "丢弃开头片段",
+          label: "丢弃原视频片头",
           kind: "boolean",
           node: { type: "split_compose_per_video", remark: "单视频拆解重组" },
           key: "dropHead",
+          inlinePair: true,
           defaultValue: false,
         },
         {
           id: "re_drop_tail",
-          label: "丢弃结尾片段",
+          label: "丢弃原视频片尾",
           kind: "boolean",
           node: { type: "split_compose_per_video", remark: "单视频拆解重组" },
           key: "dropTail",
+          inlinePair: true,
           defaultValue: true,
         },
         {
@@ -755,14 +559,16 @@ const SYSTEM_BOARD_SCHEMAS: Record<BuiltinWorkflowKind, SystemBoardSectionSchema
           kind: "boolean",
           node: { type: "split_compose_per_video", remark: "单视频拆解重组" },
           key: "shuffle",
+          inlinePair: true,
           defaultValue: true,
         },
         {
           id: "re_end_video",
-          label: "替换结尾视频(可选)",
+          label: "新视频结尾(可选)",
           kind: "video",
           node: { type: "select_video", remark: "可选替换结尾" },
           key: "videoPath",
+          inlinePair: true,
         },
       ],
     },
@@ -826,6 +632,20 @@ const resolvedSections = computed<ResolvedSection[]>(() => {
 
 function rawValue(field: ResolvedField): unknown {
   const config = readNodeConfig(props.graph, field.nodeId);
+  if (field.derived === "drop_head_tail_mode") {
+    const dropHead = config.dropHead === true;
+    const dropTail = config.dropTail === true;
+    if (dropHead && dropTail) {
+      return "both";
+    }
+    if (dropHead) {
+      return "head";
+    }
+    if (dropTail) {
+      return "tail";
+    }
+    return "none";
+  }
   if (field.key in config) {
     return config[field.key];
   }
@@ -888,6 +708,24 @@ function writeBoolean(field: ResolvedField, value: boolean) {
 }
 
 function writeSelect(field: ResolvedField, value: string | null) {
+  if (field.derived === "drop_head_tail_mode") {
+    const mode = value ?? "none";
+    emitUpdate(
+      {
+        ...field,
+        key: "dropHead",
+      },
+      mode === "head" || mode === "both",
+    );
+    emitUpdate(
+      {
+        ...field,
+        key: "dropTail",
+      },
+      mode === "tail" || mode === "both",
+    );
+    return;
+  }
   emitUpdate(field, value ?? "");
 }
 

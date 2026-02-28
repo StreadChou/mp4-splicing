@@ -185,8 +185,8 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             type: "read_mp4_files",
             remark: "读取待处理视频",
             config: {
-              recursive: false,
-              maxDepth: 0,
+              recursive: true,
+              maxDepth: 2,
             },
             position: { x: 520, y: 100 },
           },
