@@ -1,15 +1,12 @@
 export type WorkflowSource = "system" | "user";
 
 export type BuiltinWorkflowKind =
-  | "concat"
-  | "single_split"
-  | "batch_split"
-  | "auto_download"
-  | "auto_split"
-  | "remove_ending"
   | "batch_download"
-  | "download_auto_split"
+  | "concat"
+  | "auto_split"
   | "auto_split_concat"
+  | "download_auto_split"
+  | "remove_ending"
   | "custom";
 
 export type WorkflowTaskStatus = "queued" | "running" | "waiting_input" | "completed" | "failed" | "canceled";
@@ -17,9 +14,7 @@ export type WorkflowTaskStatus = "queued" | "running" | "waiting_input" | "compl
 export interface WorkflowGraphNode {
   id: string;
   type: string;
-  label: string;
-  inputs?: string[];
-  outputs?: string[];
+  remark?: string;
   config?: Record<string, unknown>;
   position?: {
     x: number;
@@ -151,4 +146,4 @@ export interface WorkflowStoreSchema {
   tasks: WorkflowTaskRecord[];
 }
 
-export const WORKFLOW_SCHEMA_VERSION = 1;
+export const WORKFLOW_SCHEMA_VERSION = 5;

@@ -1,4 +1,7 @@
 import { PORT_VALUE_TYPES, WORKFLOW_NODE_MACRO_MAP, WORKFLOW_NODE_PORT_TEMPLATES } from "../../../../src/shared/workflow-node-macros";
+import { PortDataType } from "../../../../src/shared/nodes/enums";
+import { arePortSpecsCompatible, type PortTypeSpec } from "../../../../src/shared/nodes/port-compat";
+import { getNodeDefinition } from "../../../../src/shared/nodes/registry";
 import type { WorkflowDefinition, WorkflowGraph, WorkflowGraphEdge, WorkflowGraphNode } from "../../shared/types";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -17,6 +20,22 @@ function asString(value: unknown): string {
     }
   }
   return "";
+}
+
+function isBlank(value: unknown): boolean {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  if (typeof value === "string") {
+    return value.trim().length === 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value === "number") {
+    return !Number.isFinite(value);
+  }
+  return false;
 }
 
 function resolvePortName(
@@ -62,100 +81,28 @@ function isCompatibleHandle(handleName: string, ports: string[], prefix: "in" | 
   return Number.isFinite(idx) && idx >= 0 && idx < effectivePorts.length;
 }
 
-function resolveNodePortValueType(nodeType: string, direction: "input" | "output", portName: string): string {
+function resolveNodePortTypeSpec(nodeType: string, direction: "input" | "output", portName: string): PortTypeSpec {
   const macro = WORKFLOW_NODE_MACRO_MAP[nodeType];
   if (!macro) {
-    return PORT_VALUE_TYPES.ANY_PAYLOAD;
-  }
-  const ports = direction === "input" ? macro.inputs : macro.outputs;
-  return ports.find((port) => port.name === portName)?.valueType ?? PORT_VALUE_TYPES.ANY_PAYLOAD;
-}
-
-function isPortValueTypeCompatible(sourceType: string, targetType: string): boolean {
-  return (
-    sourceType === targetType ||
-    sourceType === PORT_VALUE_TYPES.ANY_PAYLOAD ||
-    targetType === PORT_VALUE_TYPES.ANY_PAYLOAD
-  );
-}
-
-function defaultActionForNodeType(nodeType: string): string {
-  if (nodeType === "input_dir" || nodeType === "output_dir") {
-    return "pick_dir";
-  }
-  if (nodeType === "user_input") {
-    return "user_input";
-  }
-  if (nodeType === "text_split") {
-    return "text_split";
-  }
-  if (nodeType === "file") {
-    return "read_mp4";
-  }
-  if (nodeType === "select_video") {
-    return "pick_video";
-  }
-  if (nodeType === "random_concat") {
-    return "random_concat";
-  }
-  if (nodeType === "remove_ending") {
-    return "remove_ending";
-  }
-  if (nodeType === "video") {
-    return "auto_split";
-  }
-  if (nodeType === "network") {
-    return "batch_download";
-  }
-  if (nodeType === "control") {
-    return "merge";
-  }
-  if (nodeType === "io") {
-    return "pass";
-  }
-  return "";
-}
-
-function normalizeLegacyEdgeHandles(
-  sourceNode: WorkflowGraphNode,
-  targetNode: WorkflowGraphNode,
-  sourceHandle: string,
-  targetHandle: string,
-): { sourceHandle: string; targetHandle: string } {
-  const sourcePorts = sourceNode.outputs ?? [];
-  const targetPorts = targetNode.inputs ?? [];
-  const resolvedSourcePort = resolvePortName(sourceHandle || undefined, sourcePorts, "out", sourcePorts[0] || "result");
-  const resolvedTargetPort = resolvePortName(
-    targetHandle || undefined,
-    targetPorts,
-    "in",
-    targetPorts[0] || resolvedSourcePort || "input",
-  );
-
-  const sourceValueType = resolveNodePortValueType(sourceNode.type, "output", resolvedSourcePort);
-  const targetValueType = resolveNodePortValueType(targetNode.type, "input", resolvedTargetPort);
-  if (isPortValueTypeCompatible(sourceValueType, targetValueType)) {
-    return { sourceHandle, targetHandle };
-  }
-
-  const sourceConfig = asRecord(sourceNode.config);
-  const sourceAction = asString(sourceConfig.action).trim() || defaultActionForNodeType(sourceNode.type);
-
-  // 兼容旧版工作流：video(auto_split) 过去用 result 连接 random_concat.files。
-  if (
-    sourceNode.type === "video" &&
-    sourceAction === "auto_split" &&
-    targetNode.type === "random_concat" &&
-    resolvedTargetPort === "files" &&
-    sourcePorts.includes("files")
-  ) {
     return {
-      sourceHandle: "files",
-      targetHandle: targetHandle || "files",
+      valueType: PORT_VALUE_TYPES.ANY_PAYLOAD as PortDataType,
+      multiple: false,
     };
   }
+  const ports = direction === "input" ? macro.inputs : macro.outputs;
+  const found = ports.find((port) => port.name === portName);
+  return {
+    valueType: (found?.valueType ?? PORT_VALUE_TYPES.ANY_PAYLOAD) as PortDataType,
+    multiple: found?.multiple === true,
+  };
+}
 
-  return { sourceHandle, targetHandle };
+function resolveGraphNodeLabel(node: Pick<WorkflowGraphNode, "id" | "type" | "remark">): string {
+  const remark = asString(node.remark).trim();
+  if (remark) {
+    return remark;
+  }
+  return getNodeDefinition(node.type)?.name || node.id;
 }
 
 export function normalizeWorkflowGraph(value: unknown): WorkflowGraph {
@@ -163,37 +110,38 @@ export function normalizeWorkflowGraph(value: unknown): WorkflowGraph {
   const nodesInput = Array.isArray(record.nodes) ? record.nodes : [];
   const edgesInput = Array.isArray(record.edges) ? record.edges : [];
 
-  const nodes: WorkflowGraphNode[] = nodesInput.map((item, idx) => {
-    const node = asRecord(item);
-    const pos = asRecord(node.position);
-    const posX = Number(pos.x);
-    const posY = Number(pos.y);
+  const nodes: WorkflowGraphNode[] = nodesInput
+    .map((item, idx) => {
+      const node = asRecord(item);
+      const type = asString(node.type).trim();
+      if (!type) {
+        return null;
+      }
+      const pos = asRecord(node.position);
+      const posX = Number(pos.x);
+      const posY = Number(pos.y);
+      const remark = asString(node.remark).trim();
 
-    const baseNode: WorkflowGraphNode = {
-      id: asString(node.id) || `node_${String(idx + 1)}`,
-      type: asString(node.type) || "custom",
-      label: asString(node.label) || `节点${String(idx + 1)}`,
-      config: asRecord(node.config),
-    };
-    const inputs = Array.isArray(node.inputs) ? node.inputs.map((entry) => String(entry)).filter(Boolean) : [];
-    const outputs = Array.isArray(node.outputs) ? node.outputs.map((entry) => String(entry)).filter(Boolean) : [];
-    const canonicalPorts = WORKFLOW_NODE_PORT_TEMPLATES[baseNode.type];
-    const finalInputs = canonicalPorts ? canonicalPorts.inputs : inputs;
-    const finalOutputs = canonicalPorts ? canonicalPorts.outputs : outputs;
-    if (finalInputs.length > 0) {
-      baseNode.inputs = [...finalInputs];
-    }
-    if (finalOutputs.length > 0) {
-      baseNode.outputs = [...finalOutputs];
-    }
-    if (Number.isFinite(posX) && Number.isFinite(posY)) {
-      baseNode.position = {
-        x: posX,
-        y: posY,
+      const parsedNode: WorkflowGraphNode = {
+        id: asString(node.id) || `node_${String(idx + 1)}`,
+        type,
+        config: asRecord(node.config),
       };
-    }
-    return baseNode;
-  });
+
+      if (remark) {
+        parsedNode.remark = remark;
+      }
+
+      if (Number.isFinite(posX) && Number.isFinite(posY)) {
+        parsedNode.position = {
+          x: posX,
+          y: posY,
+        };
+      }
+
+      return parsedNode;
+    })
+    .filter((item): item is WorkflowGraphNode => item !== null);
 
   const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
   const edges: WorkflowGraphEdge[] = edgesInput
@@ -205,25 +153,18 @@ export function normalizeWorkflowGraph(value: unknown): WorkflowGraph {
         return null;
       }
 
-      const parsed: WorkflowGraphEdge = {
-        id: asString(edge.id) || `edge_${String(idx + 1)}`,
-        source,
-        target,
-      };
-
       const sourceNode = nodeMap.get(source);
       const targetNode = nodeMap.get(target);
       if (!sourceNode || !targetNode) {
         return null;
       }
 
-      let sourceHandle = asString(edge.sourceHandle);
-      let targetHandle = asString(edge.targetHandle);
-      const normalizedHandles = normalizeLegacyEdgeHandles(sourceNode, targetNode, sourceHandle, targetHandle);
-      sourceHandle = normalizedHandles.sourceHandle;
-      targetHandle = normalizedHandles.targetHandle;
-      const sourcePorts = sourceNode.outputs ?? [];
-      const targetPorts = targetNode.inputs ?? [];
+      const sourcePorts = WORKFLOW_NODE_PORT_TEMPLATES[sourceNode.type]?.outputs || [];
+      const targetPorts = WORKFLOW_NODE_PORT_TEMPLATES[targetNode.type]?.inputs || [];
+
+      const sourceHandle = asString(edge.sourceHandle);
+      const targetHandle = asString(edge.targetHandle);
+
       if (sourceHandle && !isCompatibleHandle(sourceHandle, sourcePorts, "out")) {
         return null;
       }
@@ -231,19 +172,25 @@ export function normalizeWorkflowGraph(value: unknown): WorkflowGraph {
         return null;
       }
 
-      const resolvedSourcePort = resolvePortName(sourceHandle, sourcePorts, "out", sourcePorts[0] || "result");
+      const resolvedSourcePort = resolvePortName(sourceHandle || undefined, sourcePorts, "out", sourcePorts[0] || "result");
       const resolvedTargetPort = resolvePortName(
-        targetHandle,
+        targetHandle || undefined,
         targetPorts,
         "in",
         targetPorts[0] || resolvedSourcePort || "input",
       );
-      const sourceValueType = resolveNodePortValueType(sourceNode.type, "output", resolvedSourcePort);
-      const targetValueType = resolveNodePortValueType(targetNode.type, "input", resolvedTargetPort);
-      if (!isPortValueTypeCompatible(sourceValueType, targetValueType)) {
+
+      const sourcePortSpec = resolveNodePortTypeSpec(sourceNode.type, "output", resolvedSourcePort);
+      const targetPortSpec = resolveNodePortTypeSpec(targetNode.type, "input", resolvedTargetPort);
+      if (!arePortSpecsCompatible(sourcePortSpec, targetPortSpec)) {
         return null;
       }
 
+      const parsed: WorkflowGraphEdge = {
+        id: asString(edge.id) || `edge_${String(idx + 1)}`,
+        source,
+        target,
+      };
       if (sourceHandle) {
         parsed.sourceHandle = sourceHandle;
       }
@@ -270,7 +217,33 @@ export function validateWorkflowGraphStructure(graph: WorkflowGraph): string[] {
     }
   }
 
+  for (const node of graph.nodes) {
+    if (!getNodeDefinition(node.type)) {
+      issues.push(`节点「${resolveGraphNodeLabel(node)}」类型不存在: ${node.type}`);
+    }
+  }
+
   return issues;
+}
+
+function hasRuntimeForInputPort(
+  config: Record<string, unknown>,
+  runtimeInput: Record<string, unknown>,
+  portName: string,
+): boolean {
+  if (!isBlank(config[portName]) || !isBlank(runtimeInput[portName])) {
+    return true;
+  }
+  if (portName === "dir") {
+    return !isBlank(config.inputDir) || !isBlank(runtimeInput.inputDir);
+  }
+  if (portName === "outputDir") {
+    return !isBlank(config.outputDir) || !isBlank(runtimeInput.outputDir);
+  }
+  if (portName === "text") {
+    return !isBlank(config.text) || !isBlank(runtimeInput.text);
+  }
+  return false;
 }
 
 export function validateWorkflowRunConfig(workflow: WorkflowDefinition, runtimeInput: Record<string, unknown>): string[] {
@@ -286,184 +259,42 @@ export function validateWorkflowRunConfig(workflow: WorkflowDefinition, runtimeI
     incomingByTarget.set(edge.target, list);
   }
 
-  const hasIncomingBy = (
-    node: WorkflowGraphNode,
-    matcher: (sourceNode: WorkflowGraphNode, sourcePort: string, targetPort: string) => boolean,
-  ): boolean => {
-    const incomingEdges = incomingByTarget.get(node.id) ?? [];
-    return incomingEdges.some((edge) => {
-      const sourceNode = nodeMap.get(edge.source);
-      if (!sourceNode) {
-        return false;
-      }
-      const sourcePort = resolvePortName(edge.sourceHandle, sourceNode.outputs, "out", "result");
-      const targetPort = resolvePortName(edge.targetHandle, node.inputs, "in", sourcePort || "input");
-      return matcher(sourceNode, sourcePort, targetPort);
-    });
-  };
-
-  const hasIncomingInputDirProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(
-      node,
-      (sourceNode, sourcePort, targetPort) =>
-        sourceNode.type === "input_dir" ||
-        sourcePort === "dir" ||
-        sourcePort === "inputDir" ||
-        sourcePort === "path" ||
-        targetPort === "dir" ||
-        targetPort === "inputDir" ||
-        targetPort === "path",
-    );
-
-  const hasIncomingOutputDirProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(
-      node,
-      (sourceNode, sourcePort, targetPort) =>
-        sourceNode.type === "output_dir" || sourcePort === "outputDir" || targetPort === "outputDir",
-    );
-
-  const hasIncomingTextProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(
-      node,
-      (sourceNode, sourcePort, targetPort) =>
-        sourceNode.type === "user_input" ||
-        sourcePort === "text" ||
-        sourcePort === "value" ||
-        sourcePort === "result" ||
-        targetPort === "text",
-    );
-
-  const hasIncomingUrlsProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(
-      node,
-      (sourceNode, sourcePort, targetPort) =>
-        sourceNode.type === "text_split" ||
-        sourcePort === "items" ||
-        sourcePort === "urls" ||
-        sourcePort === "files" ||
-        targetPort === "urls" ||
-        targetPort === "items",
-    );
-
-  const hasIncomingFilesProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(node, (_sourceNode, sourcePort, targetPort) => sourcePort === "files" || targetPort === "files");
-
-  const hasIncomingSplitConfigProvider = (node: WorkflowGraphNode) =>
-    hasIncomingBy(
-      node,
-      (_sourceNode, sourcePort, targetPort) => sourcePort === "splitConfig" || targetPort === "splitConfig",
-    );
-
   const issues: string[] = [];
+
   for (const node of workflow.graph.nodes) {
+    const definition = getNodeDefinition(node.type);
+    if (!definition) {
+      continue;
+    }
+
     const config = asRecord(node.config);
-    const action = asString(config.action).trim() || defaultActionForNodeType(node.type);
-    const inputDir = asString(config.inputDir || runtimeInput.inputDir).trim();
-    const outputDir = asString(config.outputDir || runtimeInput.outputDir).trim();
-    const hasInputSource = hasIncomingInputDirProvider(node);
-    const hasOutputSource = hasIncomingOutputDirProvider(node);
-    const hasTextSource = hasIncomingTextProvider(node);
-    const hasUrlsSource = hasIncomingUrlsProvider(node);
-    const hasFilesSource = hasIncomingFilesProvider(node);
-    const hasSplitConfigSource = hasIncomingSplitConfigProvider(node);
 
-    if (node.type === "input_dir" && !inputDir) {
-      issues.push(`节点「${node.label}」缺少输入目录(inputDir)`);
-    }
-
-    if (node.type === "output_dir" && !outputDir) {
-      issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-    }
-
-    if (node.type === "file" && action === "read_mp4" && !inputDir && !hasInputSource) {
-      issues.push(`节点「${node.label}」缺少输入目录(inputDir)`);
-    }
-
-    if (node.type === "select_video") {
-      const videoPath = asString(config.videoPath || runtimeInput.videoPath).trim();
-      const required = config.required === undefined ? false : Boolean(config.required);
-      if (required && !videoPath) {
-        issues.push(`节点「${node.label}」缺少视频路径(videoPath)`);
+    for (const field of definition.fields) {
+      if (!field.required) {
+        continue;
+      }
+      if (isBlank(config[field.key])) {
+        issues.push(`节点「${resolveGraphNodeLabel(node)}」缺少必填配置(${field.key})`);
       }
     }
 
-    if (node.type === "user_input") {
-      const text = asString(config.text || runtimeInput.text || runtimeInput.urlsText).trim();
-      if (!text) {
-        issues.push(`节点「${node.label}」缺少文本输入`);
-      }
-    }
+    const inputPorts = definition.ports.filter((port) => port.direction === "input" && port.required);
+    for (const port of inputPorts) {
+      const incoming = incomingByTarget.get(node.id) ?? [];
+      const hasIncoming = incoming.some((edge) => {
+        const sourceNode = nodeMap.get(edge.source);
+        if (!sourceNode) {
+          return false;
+        }
+        const sourcePorts = WORKFLOW_NODE_PORT_TEMPLATES[sourceNode.type]?.outputs || [];
+        const targetPorts = WORKFLOW_NODE_PORT_TEMPLATES[node.type]?.inputs || [];
+        const sourcePort = resolvePortName(edge.sourceHandle, sourcePorts, "out", sourcePorts[0] || "result");
+        const targetPort = resolvePortName(edge.targetHandle, targetPorts, "in", sourcePort || targetPorts[0] || "input");
+        return targetPort === port.name;
+      });
 
-    if (node.type === "text_split") {
-      const text = asString(config.text || runtimeInput.text || runtimeInput.urlsText).trim();
-      if (!hasTextSource && !text) {
-        issues.push(`节点「${node.label}」缺少文本输入来源`);
-      }
-    }
-
-    if (node.type === "network" && action === "batch_download") {
-      const urlsText = asString(config.urlsText || runtimeInput.urlsText).trim();
-      const urlArray = Array.isArray(config.urls) ? config.urls : Array.isArray(runtimeInput.urls) ? runtimeInput.urls : [];
-      if (!hasUrlsSource && urlsText.length === 0 && urlArray.length === 0) {
-        issues.push(`节点「${node.label}」缺少下载 URL 输入`);
-      }
-      if (!outputDir && !hasOutputSource) {
-        issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-      }
-    }
-
-    if (node.type === "video" && action === "auto_split") {
-      const runtimeFiles = Array.isArray(runtimeInput.files) ? runtimeInput.files.filter(Boolean) : [];
-      const runtimeVideoPath = asString(runtimeInput.videoPath).trim();
-      const configVideoPath = asString(config.videoPath).trim();
-      if (!hasFilesSource && runtimeFiles.length === 0 && !runtimeVideoPath && !configVideoPath) {
-        issues.push(`节点「${node.label}」缺少视频输入(files/videoPath)`);
-      }
-      if (!outputDir && !hasOutputSource) {
-        issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-      }
-    }
-
-    if (node.type === "video" && action === "split_profile") {
-      const algorithm = asString(config.algorithm || runtimeInput.algorithm).trim();
-      if (!algorithm) {
-        issues.push(`节点「${node.label}」缺少拆解算法(algorithm)`);
-      }
-    }
-
-    if (node.type === "video" && (action === "concat" || action === "remove_ending")) {
-      if (!hasFilesSource && !inputDir && !hasInputSource) {
-        issues.push(`节点「${node.label}」缺少输入目录(inputDir)`);
-      }
-      if (!outputDir && !hasOutputSource) {
-        issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-      }
-    }
-
-    if (node.type === "video" && action === "split_segments" && !outputDir && !hasOutputSource) {
-      issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-    }
-
-    if (node.type === "random_concat") {
-      const runtimeFiles = Array.isArray(runtimeInput.files) ? runtimeInput.files.filter(Boolean) : [];
-      if (!hasFilesSource && runtimeFiles.length === 0) {
-        issues.push(`节点「${node.label}」缺少候选视频输入(files)`);
-      }
-      if (!outputDir && !hasOutputSource) {
-        issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
-      }
-    }
-
-    if (node.type === "remove_ending") {
-      const runtimeFiles = Array.isArray(runtimeInput.files) ? runtimeInput.files.filter(Boolean) : [];
-      if (!hasFilesSource && runtimeFiles.length === 0) {
-        issues.push(`节点「${node.label}」缺少待处理视频输入(files)`);
-      }
-      if (!hasSplitConfigSource && !runtimeInput.splitConfig) {
-        issues.push(`节点「${node.label}」缺少拆解参数输入(splitConfig)`);
-      }
-      if (!outputDir && !hasOutputSource) {
-        issues.push(`节点「${node.label}」缺少输出目录(outputDir)`);
+      if (!hasIncoming && !hasRuntimeForInputPort(config, runtimeInput, port.name)) {
+        issues.push(`节点「${resolveGraphNodeLabel(node)}」缺少必需输入端口(${port.name})`);
       }
     }
   }

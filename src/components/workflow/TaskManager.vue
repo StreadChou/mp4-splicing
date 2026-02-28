@@ -287,6 +287,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Background } from "@vue-flow/background";
 import { ConnectionLineType, type Edge, type Node, VueFlow } from "@vue-flow/core";
+import { getNodeDefinition } from "src/shared/nodes";
 import {
   cancelTask as cancelTaskApi,
   clearCompletedTasks,
@@ -343,7 +344,7 @@ const completedCount = computed(() => tasks.value.filter((item) => item.status =
 const taskNodeMap = computed(() => {
   const map = new Map<string, string>();
   for (const node of taskDetail.value?.workflowGraph?.nodes || []) {
-    map.set(node.id, node.label || node.id);
+    map.set(node.id, node.remark || getNodeDefinition(node.type)?.name || node.id);
   }
   return map;
 });
@@ -406,7 +407,7 @@ const taskGraphNodes = computed<Array<Node>>(() => {
       id: node.id,
       position: { x, y },
       data: {
-        label: `${stateIcon(state)} ${node.label || node.id}`,
+        label: `${stateIcon(state)} ${node.remark || getNodeDefinition(node.type)?.name || node.id}`,
       },
       style: resolveNodeStyle(node.id, state),
       draggable: false,

@@ -91,3 +91,7 @@ export async function writeTaskRuntime(taskId: string, runtime: TaskRuntimeSnaps
 export async function deleteTaskRuntime(taskId: string): Promise<void> {
   await fsp.rm(getTaskRuntimeFile(taskId), { force: true }).catch(() => void 0);
 }
+
+export async function clearAllTaskRuntime(): Promise<void> {
+  await fsp.rm(getTaskRuntimeBaseDir(), { recursive: true, force: true }).catch(() => void 0);
+}

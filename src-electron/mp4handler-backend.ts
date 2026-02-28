@@ -7,29 +7,29 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import jpeg from "jpeg-js";
-import { deleteTaskRuntime, readTaskRuntime, writeTaskRuntime } from "./backend/infra/runtime/task-runtime-store";
+import { clearAllTaskRuntime, deleteTaskRuntime, readTaskRuntime, writeTaskRuntime } from "./backend/infra/runtime/task-runtime-store";
 import {
+  getWorkflowSchemaVersion,
   getTasksFromStore,
   getWorkflowsFromStore,
+  resetWorkflowStore,
+  setWorkflowSchemaVersion,
   setTasksToStore,
   setWorkflowsToStore,
 } from "./backend/infra/store/workflow-store";
 import {
-  type InteractionRequest,
   type WorkflowDefinition,
   type WorkflowGraph,
-  type WorkflowMeta,
   type WorkflowTaskRecord,
   type WorkflowTaskStatus,
   WORKFLOW_SCHEMA_VERSION,
 } from "./backend/shared/types";
-import {
-  normalizeWorkflowGraph,
-  validateWorkflowGraphStructure,
-  validateWorkflowRunConfig,
-} from "./backend/domain/graph/graph-schema";
 import type { NodeExecutionDeps } from "./backend/domain/graph/node-execution";
 import { executeWorkflowGraph } from "./backend/domain/graph/graph-executor";
+import { createSystemWorkflowDefinitions } from "./backend/domain/workflow/system-workflow-definitions";
+import { createWorkflowService } from "./backend/domain/workflow/workflow-service";
+import { invokeWorkflowTaskCommand } from "./backend/domain/command/workflow-task-command";
+import { createTaskLifecycle } from "./backend/domain/task/task-lifecycle";
 
 interface VideoInfo {
   codec: string;
@@ -64,19 +64,6 @@ interface FrameInfo {
 interface SegmentRange {
   start_frame: number;
   end_frame: number;
-}
-
-interface VideoTask {
-  path: string;
-  name: string;
-  status: string;
-}
-
-interface BatchProgress {
-  input_dir: string;
-  output_dir: string;
-  tasks: VideoTask[];
-  current_index: number;
 }
 
 interface DownloadProgress {
@@ -458,23 +445,6 @@ async function checkVideoCompatibility(videos: string[]): Promise<CompatibilityR
   };
 }
 
-async function checkVideoCompatibilityForPaths(videoPaths: string[]): Promise<Array<[string, VideoInfo]>> {
-  const videosInfo: Array<[string, VideoInfo]> = [];
-
-  for (const video of videoPaths) {
-    const info = await getVideoInfo(video);
-    if (!info.width || !info.height) {
-      throw new Error(`${path.basename(video)}: 无法解析分辨率`);
-    }
-    if (!(info.duration > 0)) {
-      throw new Error(`${path.basename(video)}: 无法解析时长`);
-    }
-    videosInfo.push([path.basename(video), info]);
-  }
-
-  return videosInfo;
-}
-
 function buildConcatFilter(
   videosInfo: Array<[string, VideoInfo]>,
   targetWidth: number,
@@ -519,9 +489,11 @@ async function concatVideosInternal(
     maxDepth: number;
     runTimes: number;
     outputDir: string;
+    shuffle?: boolean;
   },
 ): Promise<{ message: string; outputPaths: string[] }> {
   const { inputDir, files, startingVideo, endingVideo, randomCountMin, randomCountMax, maxDepth, runTimes, outputDir } = params;
+  const shuffle = params.shuffle ?? true;
 
   const explicitFiles = Array.from(
     new Set((files ?? []).map((item) => String(item).trim()).filter((item) => item.length > 0).map((item) => path.resolve(item))),
@@ -566,7 +538,9 @@ async function concatVideosInternal(
     throw new Error(explicitFiles.length > 0 ? "候选视频列表为空" : `在目录中未找到 MP4 文件: ${inputDir}`);
   }
 
-  videoPoolManager.getOrCreatePool(poolInputKey, poolDepth, allVideos);
+  if (shuffle) {
+    videoPoolManager.getOrCreatePool(poolInputKey, poolDepth, allVideos);
+  }
 
   const outputPaths: string[] = [];
   const baseTimestamp = formatNowStamp();
@@ -578,7 +552,9 @@ async function concatVideosInternal(
         : randomCountMin + Math.floor(Math.random() * (randomCountMax - randomCountMin + 1));
 
     const actualCount = Math.min(desiredCount, availableCount);
-    const videos = videoPoolManager.drawVideos(poolInputKey, poolDepth, actualCount);
+    const videos = shuffle
+      ? videoPoolManager.drawVideos(poolInputKey, poolDepth, actualCount)
+      : allVideos.slice(0, actualCount);
 
     if (desiredCount > availableCount) {
       emitEvent(
@@ -586,13 +562,15 @@ async function concatVideosInternal(
         "progress",
         `第 ${runIndex}/${runTimes} 次：请求 ${desiredCount} 个视频，但只找到 ${availableCount} 个，将使用全部 ${availableCount} 个视频`,
       );
-    } else {
+    } else if (shuffle) {
       const remaining = videoPoolManager.getRemainingCount(poolInputKey, poolDepth);
       const msg =
         remaining + videos.length === availableCount
           ? `第 ${runIndex}/${runTimes} 次：池子已抽完，重新填充。本次选择 ${videos.length} 个视频`
           : `第 ${runIndex}/${runTimes} 次：已选择 ${videos.length} 个视频（池子剩余 ${remaining}）`;
       emitEvent(sender, "progress", msg);
+    } else {
+      emitEvent(sender, "progress", `第 ${runIndex}/${runTimes} 次：按原始顺序组合 ${videos.length} 个视频`);
     }
 
     if (startingVideo) {
@@ -1214,268 +1192,6 @@ async function autoSplitVideoInternal(
   }
 }
 
-async function removeEndingAndConcatInternal(
-  sender: WebContents,
-  params: {
-    videoPath: string;
-    outputDir: string;
-    algorithm: string;
-    threshold: number;
-    minDuration: number;
-    newEndingVideo: string | null;
-    shuffleSegments: boolean;
-  },
-): Promise<string> {
-  const algorithm = parseAlgorithm(params.algorithm);
-  const metadata = await getVideoMetadataInternal(params.videoPath);
-
-  emitEvent(sender, "remove_ending_progress", {
-    message: "正在提取视频帧...",
-    percent: 0,
-  });
-
-  const { frames, tempDir: frameTempDir } = await extractAllFramesInternal(null, params.videoPath, false);
-  try {
-    if (frames.length < 2) {
-      throw new Error("视频帧数不足");
-    }
-
-    emitEvent(sender, "remove_ending_progress", {
-      message: "帧提取完成",
-      percent: 10,
-    });
-
-    const minFrames = Math.round(params.minDuration * metadata.fps);
-    emitEvent(sender, "remove_ending_progress", {
-      message: "正在分析帧相似度...",
-      percent: 10,
-    });
-
-    const splitPoints: number[] = [0];
-    let lastSplitFrame = 0;
-    const cache = new Map<string, GrayImage>();
-    const totalFrames = frames.length;
-
-    for (let i = 1; i < frames.length; i++) {
-      const prevFrame = frames[i - 1] as FrameInfo;
-      const currFrame = frames[i] as FrameInfo;
-
-      let similarity = 1;
-      try {
-        similarity = await calculateSimilarity(prevFrame.image_path, currFrame.image_path, algorithm, cache);
-      } catch {
-        similarity = 1;
-      }
-
-      if (similarity < params.threshold) {
-        const framesSinceLast = currFrame.frame_number - lastSplitFrame;
-        if (framesSinceLast >= minFrames) {
-          splitPoints.push(currFrame.frame_number);
-          lastSplitFrame = currFrame.frame_number;
-        }
-      }
-
-      const current = i - 1;
-      if (current % 100 === 0) {
-        const percent = 10 + Math.floor((current / totalFrames) * 50);
-        emitEvent(sender, "remove_ending_progress", {
-          message: `已分析 ${String(current)}/${String(totalFrames)} 帧`,
-          percent,
-        });
-      }
-    }
-
-    emitEvent(sender, "remove_ending_progress", {
-      message: `已分析 ${String(totalFrames)}/${String(totalFrames)} 帧`,
-      percent: 60,
-    });
-
-    if (splitPoints[splitPoints.length - 1] !== frames.length - 1) {
-      splitPoints.push(frames.length - 1);
-    }
-
-    const segments: SegmentRange[] = [];
-    for (let i = 0; i < splitPoints.length - 1; i++) {
-      segments.push({
-        start_frame: splitPoints[i] as number,
-        end_frame: (splitPoints[i + 1] as number) - 1,
-      });
-    }
-
-    const originalCount = segments.length;
-    if (segments.length === 0) {
-      throw new Error("未检测到场景切换（相似度始终高于阈值）");
-    }
-
-    segments.pop();
-
-    if (segments.length === 0) {
-      throw new Error(`检测到 ${String(originalCount)} 个片段，移除最后一个后无剩余片段，跳过该视频`);
-    }
-
-    emitEvent(sender, "remove_ending_progress", {
-      message: `识别到 ${String(originalCount)} 个片段，移除最后一个后剩余 ${String(segments.length)} 个`,
-      percent: 60,
-    });
-
-    if (params.shuffleSegments) {
-      shuffleArray(segments);
-    }
-
-    emitEvent(sender, "remove_ending_progress", {
-      message: "正在生成临时片段...",
-      percent: 60,
-    });
-
-    const videoHash = calculateHash(params.videoPath);
-    const segmentTempDir = path.join(
-      os.tmpdir(),
-      `mp4handler_${videoHash}`,
-      "segments",
-      `${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
-    );
-    await ensureDir(segmentTempDir);
-
-    try {
-      const frameTimestamps = await getVideoFrameTimestamps(params.videoPath);
-      const totalFrameCount = frameTimestamps.length;
-      const tempSegmentPaths: string[] = [];
-
-      for (let idx = 0; idx < segments.length; idx++) {
-        const segment = segments[idx] as SegmentRange;
-        const segmentNum = idx + 1;
-        const tempFile = path.join(segmentTempDir, `segment_${String(segmentNum)}.mp4`);
-
-        const startIdx = segment.start_frame;
-        const endIdx = segment.end_frame;
-        if (startIdx < 0 || endIdx < 0 || startIdx >= totalFrameCount || endIdx >= totalFrameCount || startIdx > endIdx) {
-          throw new Error(`片段 ${String(segmentNum)} 的帧范围无效`);
-        }
-
-        const startTime = frameTimestamps[startIdx] as number;
-        const endTimeExclusive =
-          endIdx + 1 < totalFrameCount
-            ? (frameTimestamps[endIdx + 1] as number)
-            : Math.max(metadata.duration, frameTimestamps[endIdx] as number);
-        const duration = Math.max(endTimeExclusive - startTime, 0);
-
-        const percent = 60 + Math.floor((segmentNum / segments.length) * 20);
-        emitEvent(sender, "remove_ending_progress", {
-          message: `正在生成临时片段 ${String(segmentNum)}/${String(segments.length)}`,
-          percent,
-        });
-
-        await runFfmpeg([
-          "-i",
-          params.videoPath,
-          "-ss",
-          String(startTime),
-          "-t",
-          String(duration),
-          "-vf",
-          "setpts=PTS-STARTPTS",
-          "-vsync",
-          "vfr",
-          "-c:v",
-          "libx264",
-          "-preset",
-          "fast",
-          "-crf",
-          "18",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "192k",
-          "-af",
-          "aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS",
-          "-fflags",
-          "+genpts",
-          "-avoid_negative_ts",
-          "make_zero",
-          "-y",
-          tempFile,
-        ]);
-
-        tempSegmentPaths.push(tempFile);
-      }
-
-      if (params.newEndingVideo) {
-        if (!(await fileExists(params.newEndingVideo))) {
-          throw new Error(`新结尾视频不存在: ${params.newEndingVideo}`);
-        }
-        tempSegmentPaths.push(params.newEndingVideo);
-      }
-
-      emitEvent(sender, "remove_ending_progress", {
-        message: "正在检测视频兼容性...",
-        percent: 80,
-      });
-
-      const videosInfo = await checkVideoCompatibilityForPaths(tempSegmentPaths);
-      const firstInfo = videosInfo[0]?.[1];
-      if (!firstInfo) {
-        throw new Error("无法获取目标分辨率");
-      }
-
-      const filter = buildConcatFilter(videosInfo, firstInfo.width, firstInfo.height);
-
-      const videoName = path.parse(params.videoPath).name;
-      const outputPath = path.join(params.outputDir, `${videoName}_processed.mp4`);
-
-      emitEvent(sender, "remove_ending_progress", {
-        message: "正在合成视频...",
-        percent: 80,
-      });
-
-      const args: string[] = [];
-      for (const p of tempSegmentPaths) {
-        args.push("-i", p);
-      }
-      args.push(
-        "-filter_complex",
-        filter,
-        "-map",
-        "[outv]",
-        "-map",
-        "[outa]",
-        "-vsync",
-        "vfr",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "23",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-fflags",
-        "+genpts",
-        "-avoid_negative_ts",
-        "make_zero",
-        "-shortest",
-        outputPath,
-      );
-
-      await runFfmpeg(args);
-
-      emitEvent(sender, "remove_ending_progress", {
-        message: "完成",
-        percent: 100,
-      });
-
-      return "";
-    } finally {
-      await cleanupPathQuietly(segmentTempDir);
-    }
-  } finally {
-    await cleanupPathQuietly(frameTempDir);
-  }
-}
-
 async function downloadSingleFile(sender: WebContents, url: string, outputDir: string): Promise<string> {
   emitEvent(sender, "download_progress", {
     url,
@@ -1602,842 +1318,54 @@ async function runWithConcurrency<T>(
   return { success, failed };
 }
 
-const TASK_LOG_LIMIT = 500;
-const taskSubscribers = new Set<WebContents>();
-const taskExecutionLocks = new Set<string>();
-const taskLogQueues = new Map<string, Promise<void>>();
-const removedTaskIds = new Set<string>();
-
 function toIsoNow(): string {
   return new Date().toISOString();
 }
 
-function normalizeWorkflowName(name: string): string {
-  return name.trim().toLowerCase();
-}
+const {
+  registerTaskSubscriber,
+  emitTaskBroadcast,
+  tryFindTask,
+  isTaskRemoved,
+  findTask,
+  removeTaskFromStore,
+  waitTaskLogQueue,
+  updateTask,
+  appendTaskLog,
+  createTaskSender,
+  setWaitingInteraction,
+  clearWaitingInteraction,
+  removedTaskIds,
+  taskLogQueues,
+  taskExecutionLocks,
+} = createTaskLifecycle({
+  getTasksFromStore,
+  setTasksToStore,
+  readTaskRuntime,
+  writeTaskRuntime,
+  toIsoNow,
+});
 
-function workflowToMeta(workflow: WorkflowDefinition): WorkflowMeta {
-  return {
-    id: workflow.id,
-    name: workflow.name,
-    description: workflow.description,
-    source: workflow.source,
-    readonly: workflow.readonly,
-    updatedAt: workflow.updatedAt,
-    systemKind: workflow.systemKind,
-  };
-}
-
-function registerTaskSubscriber(sender: WebContents): void {
-  if (sender.isDestroyed()) {
-    return;
-  }
-  taskSubscribers.add(sender);
-}
-
-function emitTaskBroadcast(event: string, payload: unknown): void {
-  for (const sender of Array.from(taskSubscribers)) {
-    if (sender.isDestroyed()) {
-      taskSubscribers.delete(sender);
-      continue;
-    }
-    sender.send("mp4handler:event", { event, payload });
-  }
-}
-
-function tryFindTask(taskId: string): WorkflowTaskRecord | null {
-  return getTasksFromStore().find((item) => item.id === taskId) ?? null;
-}
-
-function isTaskRemoved(taskId: string): boolean {
-  return removedTaskIds.has(taskId) || !tryFindTask(taskId);
-}
-
-function findTask(taskId: string): WorkflowTaskRecord {
-  const task = tryFindTask(taskId);
-  if (!task) {
-    throw new Error("任务不存在");
-  }
-  return task;
-}
-
-function removeTaskFromStore(taskId: string): WorkflowTaskRecord | null {
-  const tasks = getTasksFromStore();
-  const index = tasks.findIndex((item) => item.id === taskId);
-  if (index < 0) {
-    return null;
-  }
-  const removed = tasks[index] as WorkflowTaskRecord;
-  tasks.splice(index, 1);
-  setTasksToStore(tasks);
-  emitTaskBroadcast("task:removed", { taskId });
-  return removed;
-}
-
-async function waitTaskLogQueue(taskId: string): Promise<void> {
-  const pending = taskLogQueues.get(taskId);
-  if (!pending) {
-    return;
-  }
-  await pending.catch(() => undefined);
-}
-
-function updateTask(taskId: string, patch: Partial<WorkflowTaskRecord>): WorkflowTaskRecord {
-  const tasks = getTasksFromStore();
-  const index = tasks.findIndex((item) => item.id === taskId);
-  if (index < 0) {
-    throw new Error("任务不存在");
-  }
-  const updated: WorkflowTaskRecord = {
-    ...(tasks[index] as WorkflowTaskRecord),
-    ...patch,
-    updatedAt: toIsoNow(),
-  };
-  tasks[index] = updated;
-  setTasksToStore(tasks);
-  emitTaskBroadcast("task:update", updated);
-  return updated;
-}
-
-async function appendTaskLog(
-  taskId: string,
-  message: string,
-  level: "info" | "error" | "warn" = "info",
-  meta?: { nodeId?: string; nodeLabel?: string },
-): Promise<void> {
-  if (isTaskRemoved(taskId)) {
-    return;
-  }
-
-  const prev = taskLogQueues.get(taskId) ?? Promise.resolve();
-  const next = prev
-    .catch(() => undefined)
-    .then(async () => {
-      if (isTaskRemoved(taskId)) {
-        return;
-      }
-      const runtime = await readTaskRuntime(taskId);
-      runtime.logs.push({
-        timestamp: toIsoNow(),
-        level,
-        message,
-        ...(meta?.nodeId ? { nodeId: meta.nodeId } : {}),
-        ...(meta?.nodeLabel ? { nodeLabel: meta.nodeLabel } : {}),
-      });
-      if (runtime.logs.length > TASK_LOG_LIMIT) {
-        runtime.logs = runtime.logs.slice(runtime.logs.length - TASK_LOG_LIMIT);
-      }
-      await writeTaskRuntime(taskId, runtime);
-      if (!isTaskRemoved(taskId)) {
-        emitTaskBroadcast("task:log", {
-          taskId,
-          entry: runtime.logs[runtime.logs.length - 1],
-        });
-      }
-    });
-  taskLogQueues.set(taskId, next);
-  try {
-    await next;
-  } finally {
-    if (taskLogQueues.get(taskId) === next) {
-      taskLogQueues.delete(taskId);
-    }
-  }
-}
-
-function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
-  const now = toIsoNow();
-  return [
-    {
-      id: "system-batch-download",
-      name: "批量下载",
-      description: "用户输入 URL 文本 -> 拆分数组 -> 批量下载",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "batch_download",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "user_urls",
-            type: "user_input",
-            label: "用户输入(URL文本)",
-            inputs: [],
-            outputs: ["text"],
-            config: {
-              text: "",
-            },
-            position: { x: 80, y: 80 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "选择输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 320 },
-          },
-          {
-            id: "text_to_array",
-            type: "text_split",
-            label: "文本拆数组",
-            inputs: ["text"],
-            outputs: ["items"],
-            config: {
-              mode: "newline",
-              trim: true,
-              removeEmpty: true,
-            },
-            position: { x: 500, y: 80 },
-          },
-          {
-            id: "batch_download",
-            type: "network",
-            label: "批量下载",
-            inputs: ["urls", "outputDir"],
-            outputs: ["files", "done"],
-            config: {
-              action: "batch_download",
-              maxConcurrent: 3,
-              asyncDownload: true,
-            },
-            position: { x: 920, y: 200 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "user_urls", target: "text_to_array", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "text_to_array", target: "batch_download", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "output_dir", target: "batch_download", sourceHandle: "out-0", targetHandle: "in-1" },
-        ],
-      },
-    },
-    {
-      id: "system-video-concat",
-      name: "视频拼接",
-      description: "输入目录 -> 读取目录 -> 随机拼接（支持固定开头/固定结尾）",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "concat",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "input_dir",
-            type: "input_dir",
-            label: "输入目录",
-            inputs: [],
-            outputs: ["dir"],
-            config: {},
-            position: { x: 80, y: 80 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "拼接输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 320 },
-          },
-          {
-            id: "read_dir",
-            type: "file",
-            label: "读取目录",
-            inputs: ["dir"],
-            outputs: ["files", "count"],
-            config: {
-              action: "read_mp4",
-              recursive: true,
-              maxDepth: 2,
-            },
-            position: { x: 500, y: 80 },
-          },
-          {
-            id: "fixed_start",
-            type: "select_video",
-            label: "固定开头(可选)",
-            inputs: [],
-            outputs: ["videoPath"],
-            config: {
-              videoPath: "",
-            },
-            position: { x: 500, y: 320 },
-          },
-          {
-            id: "fixed_end",
-            type: "select_video",
-            label: "固定结尾(可选)",
-            inputs: [],
-            outputs: ["videoPath"],
-            config: {
-              videoPath: "",
-            },
-            position: { x: 500, y: 560 },
-          },
-          {
-            id: "random_concat",
-            type: "random_concat",
-            label: "随机拼接",
-            inputs: ["files", "startVideo", "endVideo", "outputDir"],
-            outputs: ["files", "result"],
-            config: {
-              randomCountMin: 2,
-              randomCountMax: 4,
-              runTimes: 1,
-            },
-            position: { x: 920, y: 250 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "read_dir", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "fixed_start", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e4", source: "fixed_end", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e5", source: "output_dir", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-3" },
-        ],
-      },
-    },
-    {
-      id: "system-remove-ending",
-      name: "去结尾",
-      description: "输入目录 -> 读取目录 -> 去结尾（拆解参数可复用）",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "remove_ending",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "input_dir",
-            type: "input_dir",
-            label: "输入目录",
-            inputs: [],
-            outputs: ["dir"],
-            config: {},
-            position: { x: 80, y: 80 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "处理输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 320 },
-          },
-          {
-            id: "read_dir",
-            type: "file",
-            label: "读取目录",
-            inputs: ["dir"],
-            outputs: ["files", "count"],
-            config: {
-              action: "read_mp4",
-              recursive: false,
-              maxDepth: 0,
-            },
-            position: { x: 500, y: 80 },
-          },
-          {
-            id: "split_profile",
-            type: "video",
-            label: "视频拆解参数",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "split_profile",
-              algorithm: "ssim",
-              threshold: 0.7,
-              minDuration: 2,
-              skipFirst: false,
-              skipLast: true,
-            },
-            position: { x: 500, y: 320 },
-          },
-          {
-            id: "new_ending",
-            type: "select_video",
-            label: "新结尾视频(可选)",
-            inputs: [],
-            outputs: ["videoPath"],
-            config: {
-              videoPath: "",
-            },
-            position: { x: 500, y: 560 },
-          },
-          {
-            id: "remove_ending",
-            type: "remove_ending",
-            label: "去结尾",
-            inputs: ["files", "splitConfig", "outputDir", "newEndingVideo"],
-            outputs: ["files", "result"],
-            config: {
-              shuffleSegments: false,
-            },
-            position: { x: 940, y: 260 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "read_dir", target: "remove_ending", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "split_profile", target: "remove_ending", sourceHandle: "out-1", targetHandle: "in-1" },
-          { id: "e4", source: "output_dir", target: "remove_ending", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e5", source: "new_ending", target: "remove_ending", sourceHandle: "out-0", targetHandle: "in-3" },
-        ],
-      },
-    },
-    {
-      id: "system-auto-split",
-      name: "自动拆解",
-      description: "输入目录 -> 读取目录 -> 视频拆解参数 -> 自动拆解",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "auto_split",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "input_dir",
-            type: "input_dir",
-            label: "输入目录",
-            inputs: [],
-            outputs: ["dir"],
-            config: {},
-            position: { x: 80, y: 100 },
-          },
-          {
-            id: "output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 320 },
-          },
-          {
-            id: "read_dir",
-            type: "file",
-            label: "读取目录",
-            inputs: ["dir"],
-            outputs: ["files", "count"],
-            config: {
-              action: "read_mp4",
-              recursive: true,
-              maxDepth: 2,
-            },
-            position: { x: 500, y: 100 },
-          },
-          {
-            id: "split_profile",
-            type: "video",
-            label: "视频拆解参数",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "split_profile",
-              algorithm: "ssim",
-              threshold: 0.7,
-              minDuration: 2,
-              skipFirst: false,
-              skipLast: true,
-            },
-            position: { x: 500, y: 320 },
-          },
-          {
-            id: "video_split",
-            type: "video",
-            label: "视频拆解",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "auto_split",
-            },
-            position: { x: 920, y: 210 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "read_dir", target: "video_split", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "output_dir", target: "video_split", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e4", source: "split_profile", target: "video_split", sourceHandle: "out-1", targetHandle: "in-2" },
-        ],
-      },
-    },
-    {
-      id: "system-auto-split-concat",
-      name: "自动拆解并拼接",
-      description: "输入目录 -> 自动拆解 -> 将拆解片段随机拼接（支持固定开头/固定结尾）",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "auto_split_concat",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "input_dir",
-            type: "input_dir",
-            label: "输入目录",
-            inputs: [],
-            outputs: ["dir"],
-            config: {},
-            position: { x: 80, y: 80 },
-          },
-          {
-            id: "split_output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 300 },
-          },
-          {
-            id: "concat_output_dir",
-            type: "output_dir",
-            label: "拼接输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 520 },
-          },
-          {
-            id: "read_dir",
-            type: "file",
-            label: "读取目录",
-            inputs: ["dir"],
-            outputs: ["files", "count"],
-            config: {
-              action: "read_mp4",
-              recursive: true,
-              maxDepth: 2,
-            },
-            position: { x: 500, y: 80 },
-          },
-          {
-            id: "split_profile",
-            type: "video",
-            label: "视频拆解参数",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "split_profile",
-              algorithm: "ssim",
-              threshold: 0.7,
-              minDuration: 2,
-              skipFirst: false,
-              skipLast: true,
-            },
-            position: { x: 500, y: 300 },
-          },
-          {
-            id: "video_split",
-            type: "video",
-            label: "自动拆解",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "auto_split",
-            },
-            position: { x: 920, y: 180 },
-          },
-          {
-            id: "fixed_start",
-            type: "select_video",
-            label: "固定开头(可选)",
-            inputs: [],
-            outputs: ["videoPath"],
-            config: {
-              videoPath: "",
-            },
-            position: { x: 920, y: 420 },
-          },
-          {
-            id: "fixed_end",
-            type: "select_video",
-            label: "固定结尾(可选)",
-            inputs: [],
-            outputs: ["videoPath"],
-            config: {
-              videoPath: "",
-            },
-            position: { x: 920, y: 640 },
-          },
-          {
-            id: "random_concat",
-            type: "random_concat",
-            label: "随机拼接",
-            inputs: ["files", "startVideo", "endVideo", "outputDir"],
-            outputs: ["files", "result"],
-            config: {
-              randomCountMin: 2,
-              randomCountMax: 4,
-              runTimes: 1,
-            },
-            position: { x: 1340, y: 350 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "read_dir", target: "video_split", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "split_output_dir", target: "video_split", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e4", source: "split_profile", target: "video_split", sourceHandle: "out-1", targetHandle: "in-2" },
-          { id: "e5", source: "video_split", target: "random_concat", sourceHandle: "out-2", targetHandle: "in-0" },
-          { id: "e6", source: "fixed_start", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e7", source: "fixed_end", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e8", source: "concat_output_dir", target: "random_concat", sourceHandle: "out-0", targetHandle: "in-3" },
-        ],
-      },
-    },
-    {
-      id: "system-download-auto-split",
-      name: "下载并自动拆解",
-      description: "输入 URL 文本后自动下载，再自动拆解下载结果",
-      source: "system",
-      readonly: false,
-      schemaVersion: WORKFLOW_SCHEMA_VERSION,
-      systemKind: "download_auto_split",
-      createdAt: now,
-      updatedAt: now,
-      graph: {
-        nodes: [
-          {
-            id: "user_urls",
-            type: "user_input",
-            label: "用户输入(URL文本)",
-            inputs: [],
-            outputs: ["text"],
-            config: {
-              text: "",
-            },
-            position: { x: 80, y: 80 },
-          },
-          {
-            id: "download_output_dir",
-            type: "output_dir",
-            label: "下载输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 300 },
-          },
-          {
-            id: "split_output_dir",
-            type: "output_dir",
-            label: "拆解输出目录",
-            inputs: [],
-            outputs: ["outputDir"],
-            config: {},
-            position: { x: 80, y: 520 },
-          },
-          {
-            id: "text_to_array",
-            type: "text_split",
-            label: "文本拆数组",
-            inputs: ["text"],
-            outputs: ["items"],
-            config: {
-              mode: "newline",
-              trim: true,
-              removeEmpty: true,
-            },
-            position: { x: 500, y: 80 },
-          },
-          {
-            id: "split_profile",
-            type: "video",
-            label: "视频拆解参数",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "split_profile",
-              algorithm: "ssim",
-              threshold: 0.7,
-              minDuration: 2,
-              skipFirst: false,
-              skipLast: true,
-            },
-            position: { x: 500, y: 520 },
-          },
-          {
-            id: "batch_download",
-            type: "network",
-            label: "批量下载",
-            inputs: ["urls", "outputDir"],
-            outputs: ["files", "done"],
-            config: {
-              action: "batch_download",
-              maxConcurrent: 3,
-              asyncDownload: true,
-            },
-            position: { x: 920, y: 190 },
-          },
-          {
-            id: "video_split",
-            type: "video",
-            label: "视频拆解",
-            inputs: ["files", "outputDir", "splitConfig"],
-            outputs: ["result", "splitConfig"],
-            config: {
-              action: "auto_split",
-            },
-            position: { x: 1340, y: 300 },
-          },
-        ],
-        edges: [
-          { id: "e1", source: "user_urls", target: "text_to_array", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "text_to_array", target: "batch_download", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "download_output_dir", target: "batch_download", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e4", source: "batch_download", target: "video_split", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e5", source: "split_output_dir", target: "video_split", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e6", source: "split_profile", target: "video_split", sourceHandle: "out-1", targetHandle: "in-2" },
-        ],
-      },
-    },
-  ];
-}
-
-function findSystemWorkflowDefinition(workflowId: string): WorkflowDefinition | undefined {
-  return createSystemWorkflowDefinitions().find((item) => item.id === workflowId);
-}
-
-function ensureDefaultWorkflows(): void {
-  const systemDefinitions = createSystemWorkflowDefinitions();
-  const byId = new Map(getWorkflowsFromStore().map((item) => [item.id, item] as const));
-  let changed = false;
-  const systemIdSet = new Set(systemDefinitions.map((item) => item.id));
-
-  for (const systemWorkflow of systemDefinitions) {
-    const existing = byId.get(systemWorkflow.id);
-    if (!existing) {
-      byId.set(systemWorkflow.id, systemWorkflow);
-      changed = true;
-      continue;
-    }
-
-    let normalized = existing;
-    if (
-      existing.source !== "system" ||
-      existing.readonly !== false ||
-      existing.schemaVersion !== WORKFLOW_SCHEMA_VERSION ||
-      existing.systemKind !== systemWorkflow.systemKind
-    ) {
-      normalized = {
-        ...existing,
-        source: "system",
-        readonly: false,
-        schemaVersion: WORKFLOW_SCHEMA_VERSION,
-        systemKind: systemWorkflow.systemKind,
-      };
-    }
-
-    if (normalized !== existing) {
-      byId.set(systemWorkflow.id, normalized);
-      changed = true;
-    }
-  }
-
-  for (const [workflowId, workflow] of Array.from(byId.entries())) {
-    if (workflow.source === "system" && !systemIdSet.has(workflowId)) {
-      byId.delete(workflowId);
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    const merged = Array.from(byId.values());
-    setWorkflowsToStore(merged);
-  }
-}
-
-function assertWorkflowNameUnique(name: string, ignoreWorkflowId?: string): void {
-  const normalized = normalizeWorkflowName(name);
-  const duplicated = getWorkflowsFromStore().find(
-    (item) => normalizeWorkflowName(item.name) === normalized && item.id !== ignoreWorkflowId,
-  );
-  if (duplicated) {
-    throw new Error("工作流名称重复，请使用其他名称");
-  }
-}
-
-function getWorkflowById(workflowId: string): WorkflowDefinition {
-  ensureDefaultWorkflows();
-  const workflow = getWorkflowsFromStore().find((item) => item.id === workflowId);
-  if (!workflow) {
-    throw new Error("工作流不存在");
-  }
-  return workflow;
-}
-
-function createTaskSender(taskId: string): WebContents {
-  return {
-    send: (_channel: string, message: unknown) => {
-      const data = message as { event?: string; payload?: unknown } | undefined;
-      if (!data?.event) {
-        return;
-      }
-      emitTaskBroadcast("task:progress", {
-        taskId,
-        event: data.event,
-        payload: data.payload,
-      });
-    },
-  } as unknown as WebContents;
-}
-
-async function setWaitingInteraction(taskId: string, interaction: InteractionRequest): Promise<void> {
-  if (isTaskRemoved(taskId)) {
-    return;
-  }
-  const runtime = await readTaskRuntime(taskId);
-  runtime.interaction = interaction;
-  await writeTaskRuntime(taskId, runtime);
-  if (isTaskRemoved(taskId)) {
-    return;
-  }
-  updateTask(taskId, {
-    status: "waiting_input",
-    waitingInteraction: interaction,
-    currentNodeId: interaction.nodeId,
-  });
-}
-
-async function clearWaitingInteraction(taskId: string): Promise<void> {
-  if (isTaskRemoved(taskId)) {
-    return;
-  }
-  const runtime = await readTaskRuntime(taskId);
-  runtime.interaction = null;
-  await writeTaskRuntime(taskId, runtime);
-  if (isTaskRemoved(taskId)) {
-    return;
-  }
-  updateTask(taskId, {
-    waitingInteraction: null,
-  });
-}
-
-function parseSegmentsFromPayload(payload: Record<string, unknown>): SegmentRange[] {
-  if (Array.isArray(payload.segments)) {
-    return asSegments(payload.segments);
-  }
-  const raw = asString(payload.segmentsJson || payload.segments_json);
-  if (!raw) {
-    return [];
-  }
-  const parsed = JSON.parse(raw) as unknown;
-  return asSegments(parsed);
-}
+const {
+  normalizeWorkflowName,
+  workflowToMeta,
+  findSystemWorkflowDefinition,
+  ensureDefaultWorkflows,
+  assertWorkflowNameUnique,
+  getWorkflowById,
+} = createWorkflowService({
+  getWorkflowSchemaVersion,
+  setWorkflowSchemaVersion,
+  resetWorkflowStore,
+  clearAllTaskRuntime,
+  getWorkflowsFromStore,
+  setWorkflowsToStore,
+  createSystemWorkflowDefinitions,
+  workflowSchemaVersion: WORKFLOW_SCHEMA_VERSION,
+  removedTaskIds,
+  taskLogQueues,
+  taskExecutionLocks,
+});
 
 function getNodeExecutionDeps(): NodeExecutionDeps {
   return {
@@ -2448,10 +1376,7 @@ function getNodeExecutionDeps(): NodeExecutionDeps {
     downloadSingleFile,
     concatVideosInternal,
     autoSplitVideoInternal,
-    removeEndingAndConcatInternal,
-    generateVideoSegmentsInternal,
     appendTaskLog,
-    parseSegmentsFromPayload,
   };
 }
 
@@ -2475,264 +1400,6 @@ async function executeCustomGraphWorkflow(
     },
     resumePayload,
   );
-}
-
-async function executeConcatWorkflow(task: WorkflowTaskRecord): Promise<void> {
-  const sender = createTaskSender(task.id);
-  const runtimeInput = task.runtimeInput;
-  const outputDir = asString(runtimeInput.outputDir) || task.runDir;
-  await ensureDir(outputDir);
-
-  await appendTaskLog(task.id, "开始执行视频拼接");
-  const concatParams = {
-    inputDir: asString(runtimeInput.inputDir),
-    startingVideo: runtimeInput.startingVideo ? asString(runtimeInput.startingVideo) : null,
-    endingVideo: runtimeInput.endingVideo ? asString(runtimeInput.endingVideo) : null,
-    randomCountMin: Math.max(1, Math.round(asNumber(runtimeInput.randomCountMin) || 2)),
-    randomCountMax: Math.max(1, Math.round(asNumber(runtimeInput.randomCountMax) || 4)),
-    maxDepth: Math.max(0, Math.round(asNumber(runtimeInput.maxDepth) || 2)),
-    runTimes: Math.max(1, Math.round(asNumber(runtimeInput.runTimes) || 1)),
-    outputDir,
-    ...(Array.isArray(runtimeInput.files) ? { files: runtimeInput.files.map((item) => String(item)) } : {}),
-  };
-  const result = await concatVideosInternal(sender, concatParams);
-  await appendTaskLog(task.id, result.message);
-}
-
-async function executeAutoSplitWorkflow(task: WorkflowTaskRecord): Promise<void> {
-  const sender = createTaskSender(task.id);
-  const runtimeInput = task.runtimeInput;
-  const files = await listMp4Files(asString(runtimeInput.inputDir));
-  const outputDir = asString(runtimeInput.outputDir) || task.runDir;
-  await ensureDir(outputDir);
-
-  for (const videoPath of files) {
-    await appendTaskLog(task.id, `开始自动拆解: ${videoPath}`);
-    await autoSplitVideoInternal(sender, {
-      videoPath,
-      outputDir,
-      algorithm: asString(runtimeInput.algorithm) || "ssim",
-      threshold: asNumber(runtimeInput.threshold) || 0.7,
-      minDuration: asNumber(runtimeInput.minDuration) || 2,
-      skipFirst: asBoolean(runtimeInput.skipFirst),
-      skipLast: runtimeInput.skipLast === undefined ? true : asBoolean(runtimeInput.skipLast),
-    });
-  }
-}
-
-async function executeRemoveEndingWorkflow(task: WorkflowTaskRecord): Promise<void> {
-  const sender = createTaskSender(task.id);
-  const runtimeInput = task.runtimeInput;
-  const files = await listMp4Files(asString(runtimeInput.inputDir));
-  const outputDir = asString(runtimeInput.outputDir) || task.runDir;
-  await ensureDir(outputDir);
-
-  for (const videoPath of files) {
-    await appendTaskLog(task.id, `开始去结尾处理: ${videoPath}`);
-    await removeEndingAndConcatInternal(sender, {
-      videoPath,
-      outputDir,
-      algorithm: asString(runtimeInput.algorithm) || "ssim",
-      threshold: asNumber(runtimeInput.threshold) || 0.7,
-      minDuration: asNumber(runtimeInput.minDuration) || 2,
-      newEndingVideo: runtimeInput.newEndingVideo ? asString(runtimeInput.newEndingVideo) : null,
-      shuffleSegments: asBoolean(runtimeInput.shuffleSegments),
-    });
-  }
-}
-
-async function executeBatchDownloadWorkflow(task: WorkflowTaskRecord): Promise<void> {
-  const sender = createTaskSender(task.id);
-  const runtimeInput = task.runtimeInput;
-  const outputDir = asString(runtimeInput.outputDir) || task.runDir;
-  await ensureDir(outputDir);
-  const urls = Array.isArray(runtimeInput.urls)
-    ? runtimeInput.urls.map((item) => String(item)).filter(Boolean)
-    : asString(runtimeInput.urlsText)
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-  const maxConcurrent = Math.max(1, Math.round(asNumber(runtimeInput.maxConcurrent) || 3));
-  const { success, failed } = await runWithConcurrency(urls, maxConcurrent, async (url) => {
-    await downloadSingleFile(sender, url, outputDir);
-  });
-  await appendTaskLog(task.id, `下载完成，成功 ${String(success)}，失败 ${String(failed)}`);
-}
-
-async function ensureSingleSplitWaiting(task: WorkflowTaskRecord): Promise<void> {
-  const runtime = await readTaskRuntime(task.id);
-  const videoPath = asString(task.runtimeInput.videoPath);
-  const outputDir = asString(task.runtimeInput.outputDir) || path.dirname(videoPath);
-  if (!videoPath) {
-    throw new Error("运行参数缺少 videoPath");
-  }
-
-  runtime.phase = "await_single_segments";
-  runtime.context = {
-    videoPath,
-    outputDir,
-  };
-  await writeTaskRuntime(task.id, runtime);
-
-  const interaction: InteractionRequest = {
-    taskId: task.id,
-    nodeId: "human_select_segments",
-    title: "请填写拆解片段",
-    description: "请输入 JSON 格式片段数组，例如 [{\"start_frame\":0,\"end_frame\":100}]",
-    formSchema: [
-      {
-        id: "segmentsJson",
-        label: "片段 JSON",
-        type: "textarea",
-        required: true,
-        placeholder: "[{\"start_frame\":0,\"end_frame\":100}]",
-      },
-    ],
-    context: {
-      videoPath,
-      outputDir,
-    },
-  };
-
-  await setWaitingInteraction(task.id, interaction);
-  await appendTaskLog(task.id, "任务进入人工处理：等待片段选择");
-}
-
-async function resumeSingleSplit(task: WorkflowTaskRecord, payload: Record<string, unknown>): Promise<void> {
-  const runtime = await readTaskRuntime(task.id);
-  const videoPath = asString(runtime.context.videoPath);
-  const outputDir = asString(runtime.context.outputDir) || path.dirname(videoPath);
-  if (!videoPath) {
-    throw new Error("任务上下文缺少 videoPath");
-  }
-  const segments = parseSegmentsFromPayload(payload);
-  if (segments.length === 0) {
-    throw new Error("segments 不能为空");
-  }
-
-  await clearWaitingInteraction(task.id);
-  await appendTaskLog(task.id, `收到人工片段配置，共 ${String(segments.length)} 段`);
-  await generateVideoSegmentsInternal(createTaskSender(task.id), videoPath, segments, outputDir);
-}
-
-async function ensureBatchSplitWaiting(task: WorkflowTaskRecord): Promise<void> {
-  const runtime = await readTaskRuntime(task.id);
-  if (!runtime.phase) {
-    const inputDir = asString(task.runtimeInput.inputDir);
-    const outputDir = asString(task.runtimeInput.outputDir) || task.runDir;
-    if (!inputDir) {
-      throw new Error("运行参数缺少 inputDir");
-    }
-    const files = await listMp4Files(inputDir);
-    runtime.phase = "await_batch_segments";
-    runtime.context = {
-      files,
-      index: 0,
-      outputDir,
-    };
-    await appendTaskLog(task.id, `批量拆解待处理视频数: ${String(files.length)}`);
-  }
-
-  const files = Array.isArray(runtime.context.files)
-    ? runtime.context.files.map((item) => String(item))
-    : [];
-  const index = Number(runtime.context.index ?? 0);
-  if (index >= files.length) {
-    runtime.phase = "done";
-    runtime.interaction = null;
-    await writeTaskRuntime(task.id, runtime);
-    return;
-  }
-
-  const currentVideo = files[index] as string;
-  runtime.interaction = {
-    taskId: task.id,
-    nodeId: "human_batch_segments",
-    title: `请处理视频 ${String(index + 1)}/${String(files.length)}`,
-    description: "可选择生成、跳过或稍后处理",
-    formSchema: [
-      {
-        id: "action",
-        label: "操作",
-        type: "select",
-        required: true,
-        defaultValue: "generate",
-        options: [
-          { label: "生成片段", value: "generate" },
-          { label: "跳过", value: "skip" },
-          { label: "稍后处理", value: "postpone" },
-        ],
-      },
-      {
-        id: "segmentsJson",
-        label: "片段 JSON",
-        type: "textarea",
-        placeholder: "[{\"start_frame\":0,\"end_frame\":100}]",
-      },
-      {
-        id: "deleteOriginal",
-        label: "生成后删除原文件",
-        type: "boolean",
-        defaultValue: false,
-      },
-    ],
-    context: {
-      videoPath: currentVideo,
-      index,
-      total: files.length,
-    },
-  };
-
-  await writeTaskRuntime(task.id, runtime);
-  await setWaitingInteraction(task.id, runtime.interaction);
-  await appendTaskLog(task.id, `等待人工处理视频: ${currentVideo}`);
-}
-
-async function resumeBatchSplit(task: WorkflowTaskRecord, payload: Record<string, unknown>): Promise<void> {
-  const runtime = await readTaskRuntime(task.id);
-  const files = Array.isArray(runtime.context.files)
-    ? runtime.context.files.map((item) => String(item))
-    : [];
-  let index = Number(runtime.context.index ?? 0);
-  const outputDir = asString(runtime.context.outputDir) || task.runDir;
-  if (index >= files.length) {
-    return;
-  }
-
-  const currentVideo = files[index] as string;
-  const action = asString(payload.action) || "generate";
-
-  if (action === "postpone") {
-    files.splice(index, 1);
-    files.push(currentVideo);
-    await appendTaskLog(task.id, `稍后处理: ${currentVideo}`);
-  } else if (action === "skip") {
-    index += 1;
-    await appendTaskLog(task.id, `已跳过: ${currentVideo}`);
-  } else {
-    const segments = parseSegmentsFromPayload(payload);
-    if (segments.length === 0) {
-      throw new Error("生成片段模式下必须提供 segmentsJson");
-    }
-    await appendTaskLog(task.id, `开始生成片段: ${currentVideo}`);
-    await generateVideoSegmentsInternal(createTaskSender(task.id), currentVideo, segments, outputDir);
-    if (asBoolean(payload.deleteOriginal)) {
-      await fsp.rm(currentVideo).catch(() => void 0);
-      await appendTaskLog(task.id, `已删除原文件: ${currentVideo}`);
-    }
-    index += 1;
-  }
-
-  runtime.context.files = files;
-  runtime.context.index = index;
-  runtime.interaction = null;
-  await writeTaskRuntime(task.id, runtime);
-  await clearWaitingInteraction(task.id);
-
-  if (index < files.length) {
-    await ensureBatchSplitWaiting(task);
-  }
 }
 
 async function executeTask(taskId: string, resumePayload?: Record<string, unknown>): Promise<void> {
@@ -2764,7 +1431,6 @@ async function executeTask(taskId: string, resumePayload?: Record<string, unknow
           updatedAt: task.updatedAt,
         } satisfies WorkflowDefinition)
       : getWorkflowById(task.workflowId);
-    let executedByGraph = false;
 
     if (task.status === "canceled") {
       return;
@@ -2780,40 +1446,12 @@ async function executeTask(taskId: string, resumePayload?: Record<string, unknow
       error: undefined,
     });
 
-    const shouldUseGraphExecution =
-      workflow.graph.nodes.length > 0 && (workflow.systemKind === "custom" || workflow.source === "system");
-
     const taskForExecution = tryFindTask(taskId);
     if (!taskForExecution) {
       return;
     }
 
-    if (shouldUseGraphExecution) {
-      executedByGraph = true;
-      await executeCustomGraphWorkflow(taskForExecution, workflow, resumePayload);
-    } else if (workflow.systemKind === "concat") {
-      await executeConcatWorkflow(taskForExecution);
-    } else if (workflow.systemKind === "auto_split") {
-      await executeAutoSplitWorkflow(taskForExecution);
-    } else if (workflow.systemKind === "remove_ending") {
-      await executeRemoveEndingWorkflow(taskForExecution);
-    } else if (workflow.systemKind === "batch_download") {
-      await executeBatchDownloadWorkflow(taskForExecution);
-    } else if (workflow.systemKind === "single_split") {
-      if (resumePayload) {
-        await resumeSingleSplit(taskForExecution, resumePayload);
-      } else {
-        await ensureSingleSplitWaiting(taskForExecution);
-      }
-    } else if (workflow.systemKind === "batch_split") {
-      if (resumePayload) {
-        await resumeBatchSplit(taskForExecution, resumePayload);
-      } else {
-        await ensureBatchSplitWaiting(taskForExecution);
-      }
-    } else {
-      await executeCustomGraphWorkflow(taskForExecution, workflow, resumePayload);
-    }
+    await executeCustomGraphWorkflow(taskForExecution, workflow, resumePayload);
 
     const after = tryFindTask(taskId);
     if (!after) {
@@ -2824,15 +1462,7 @@ async function executeTask(taskId: string, resumePayload?: Record<string, unknow
     }
 
     const runtime = await readTaskRuntime(taskId);
-    const shouldComplete =
-      runtime.phase === "done" ||
-      runtime.phase === "graph_done" ||
-      (!executedByGraph &&
-        (workflow.systemKind === "concat" ||
-          workflow.systemKind === "auto_split" ||
-          workflow.systemKind === "remove_ending" ||
-          workflow.systemKind === "batch_download" ||
-          workflow.systemKind === "single_split"));
+    const shouldComplete = runtime.phase === "done" || runtime.phase === "graph_done";
     if (shouldComplete) {
       updateTask(taskId, {
         status: "completed",
@@ -2867,59 +1497,9 @@ function createEmptyGraph(): WorkflowGraph {
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 function createRunDir(workflowName: string): string {
   const safeName = workflowName.replace(/[^\w\u4e00-\u9fa5-]+/g, "_");
   return path.join(app.getPath("userData"), "taskRuns", `${safeName}_${Date.now()}`);
-}
-
-function asString(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item === "string") {
-        return item;
-      }
-    }
-  }
-  return "";
-}
-
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => String(item)).map((item) => item.trim()).filter(Boolean);
-}
-
-function asNumber(value: unknown): number {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : 0;
-}
-
-function asBoolean(value: unknown): boolean {
-  return Boolean(value);
-}
-
-function asSegments(value: unknown): SegmentRange[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((item) => {
-      const segment = item as Partial<SegmentRange>;
-      return {
-        start_frame: Number(segment.start_frame ?? -1),
-        end_frame: Number(segment.end_frame ?? -1),
-      };
-    })
-    .filter((segment) => Number.isFinite(segment.start_frame) && Number.isFinite(segment.end_frame));
 }
 
 async function listMp4Files(dirPath: string): Promise<string[]> {
@@ -2962,477 +1542,34 @@ export async function invokeMp4Command(
     throw new Error("旧命令入口已下线，请使用 workflow:* 与 task:* 接口");
   }
 
-  switch (command) {
-    case "workflow:list": {
-      ensureDefaultWorkflows();
-      return getWorkflowsFromStore()
-        .map(workflowToMeta)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    }
-
-    case "workflow:get": {
-      const workflowId = asString(args.id);
-      const workflow = getWorkflowById(workflowId);
-      return {
-        ...workflow,
-        graph: normalizeWorkflowGraph(workflow.graph),
-      };
-    }
-
-    case "workflow:validate": {
-      const graph = normalizeWorkflowGraph(args.graph);
-      const issues = validateWorkflowGraphStructure(graph);
-      return {
-        valid: issues.length === 0,
-        issues,
-      };
-    }
-
-    case "workflow:create": {
-      ensureDefaultWorkflows();
-      const name = asString(args.name).trim();
-      if (!name) {
-        throw new Error("工作流名称不能为空");
-      }
-      assertWorkflowNameUnique(name);
-
-      const now = toIsoNow();
-      const created: WorkflowDefinition = {
-        id: crypto.randomUUID(),
-        name,
-        description: asString(args.description),
-        source: "user",
-        readonly: false,
-        schemaVersion: WORKFLOW_SCHEMA_VERSION,
-        systemKind: "custom",
-        graph: normalizeWorkflowGraph(args.graph) || createEmptyGraph(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      const workflows = getWorkflowsFromStore();
-      workflows.push(created);
-      setWorkflowsToStore(workflows);
-      return created;
-    }
-
-    case "workflow:update": {
-      ensureDefaultWorkflows();
-      const workflowId = asString(args.id);
-      const workflows = getWorkflowsFromStore();
-      const index = workflows.findIndex((item) => item.id === workflowId);
-      if (index < 0) {
-        throw new Error("工作流不存在");
-      }
-      const target = workflows[index] as WorkflowDefinition;
-      const nextName = asString(args.name).trim();
-      if (!nextName) {
-        throw new Error("工作流名称不能为空");
-      }
-      assertWorkflowNameUnique(nextName, workflowId);
-
-      const updated: WorkflowDefinition = {
-        ...target,
-        name: nextName,
-        description: asString(args.description),
-        graph: normalizeWorkflowGraph(args.graph),
-        systemKind: target.source === "system" ? target.systemKind : "custom",
-        updatedAt: toIsoNow(),
-      };
-      workflows[index] = updated;
-      setWorkflowsToStore(workflows);
-      return updated;
-    }
-
-    case "workflow:delete": {
-      ensureDefaultWorkflows();
-      const workflowId = asString(args.id);
-      const workflows = getWorkflowsFromStore();
-      const target = workflows.find((item) => item.id === workflowId);
-      if (!target) {
-        throw new Error("工作流不存在");
-      }
-      if (target.source === "system") {
-        throw new Error("内置工作流不可删除");
-      }
-      const filtered = workflows.filter((item) => item.id !== workflowId);
-      setWorkflowsToStore(filtered);
-      return null;
-    }
-
-    case "workflow:restore-default": {
-      ensureDefaultWorkflows();
-      const workflowId = asString(args.id);
-      const defaultDefinition = findSystemWorkflowDefinition(workflowId);
-      if (!defaultDefinition) {
-        throw new Error("仅支持还原内置工作流");
-      }
-
-      const workflows = getWorkflowsFromStore();
-      const index = workflows.findIndex((item) => item.id === workflowId);
-      const existing = index >= 0 ? (workflows[index] as WorkflowDefinition) : null;
-
-      const restored: WorkflowDefinition = {
-        ...defaultDefinition,
-        createdAt: existing?.createdAt || defaultDefinition.createdAt,
-        updatedAt: toIsoNow(),
-      };
-
-      if (index >= 0) {
-        workflows[index] = restored;
-      } else {
-        workflows.push(restored);
-      }
-      setWorkflowsToStore(workflows);
-      return restored;
-    }
-
-    case "workflow:restore-all-default": {
-      ensureDefaultWorkflows();
-      const now = toIsoNow();
-      const systemDefinitions = createSystemWorkflowDefinitions();
-      const workflowMap = new Map(getWorkflowsFromStore().map((item) => [item.id, item] as const));
-      const restoredIds: string[] = [];
-
-      for (const systemWorkflow of systemDefinitions) {
-        const existing = workflowMap.get(systemWorkflow.id);
-        const restored: WorkflowDefinition = {
-          ...systemWorkflow,
-          createdAt: existing?.createdAt || systemWorkflow.createdAt,
-          updatedAt: now,
-        };
-        workflowMap.set(systemWorkflow.id, restored);
-        restoredIds.push(systemWorkflow.id);
-      }
-
-      setWorkflowsToStore(Array.from(workflowMap.values()));
-      return {
-        restoredIds,
-        count: restoredIds.length,
-      };
-    }
-
-    case "workflow:duplicate": {
-      ensureDefaultWorkflows();
-      const workflowId = asString(args.id);
-      const sourceWorkflow = getWorkflowById(workflowId);
-      let nextName = asString(args.newName).trim();
-      if (!nextName) {
-        nextName = `${sourceWorkflow.name} 副本`;
-      }
-      if (getWorkflowsFromStore().some((item) => normalizeWorkflowName(item.name) === normalizeWorkflowName(nextName))) {
-        let seq = 2;
-        let candidate = `${nextName} ${String(seq)}`;
-        while (getWorkflowsFromStore().some((item) => normalizeWorkflowName(item.name) === normalizeWorkflowName(candidate))) {
-          seq += 1;
-          candidate = `${nextName} ${String(seq)}`;
-        }
-        nextName = candidate;
-      }
-      assertWorkflowNameUnique(nextName);
-      const now = toIsoNow();
-      const duplicated: WorkflowDefinition = {
-        ...sourceWorkflow,
-        id: crypto.randomUUID(),
-        name: nextName,
-        source: "user",
-        readonly: false,
-        systemKind: "custom",
-        createdAt: now,
-        updatedAt: now,
-      };
-      const workflows = getWorkflowsFromStore();
-      workflows.push(duplicated);
-      setWorkflowsToStore(workflows);
-      return duplicated;
-    }
-
-    case "workflow:run": {
-      ensureDefaultWorkflows();
-      const workflowId = asString(args.id);
-      const workflow = getWorkflowById(workflowId);
-      const runtimeInput = asRecord(args.runtimeInput);
-      const graphOverride = args.graph !== undefined ? normalizeWorkflowGraph(args.graph) : null;
-      const runtimeWorkflow: WorkflowDefinition = graphOverride
-        ? {
-            ...workflow,
-            graph: graphOverride,
-          }
-        : {
-            ...workflow,
-            graph: normalizeWorkflowGraph(workflow.graph),
-          };
-
-      const issues = validateWorkflowRunConfig(runtimeWorkflow, runtimeInput);
-      if (issues.length > 0) {
-        throw new Error(`运行前检查失败:\n${issues.map((item) => `- ${item}`).join("\n")}`);
-      }
-      const taskId = crypto.randomUUID();
-      removedTaskIds.delete(taskId);
-      const runDir = createRunDir(runtimeWorkflow.name);
-      await ensureDir(runDir);
-
-      const task: WorkflowTaskRecord = {
-        id: taskId,
-        workflowId: runtimeWorkflow.id,
-        workflowName: runtimeWorkflow.name,
-        status: "queued",
-        currentNodeId: "queued",
-        createdAt: toIsoNow(),
-        updatedAt: toIsoNow(),
-        runDir,
-        runtimeInput,
-        waitingInteraction: null,
-        workflowSnapshot: {
-          id: runtimeWorkflow.id,
-          name: runtimeWorkflow.name,
-          source: runtimeWorkflow.source,
-          systemKind: runtimeWorkflow.systemKind,
-          graph: runtimeWorkflow.graph,
-        },
-      };
-
-      const tasks = getTasksFromStore();
-      tasks.push(task);
-      setTasksToStore(tasks);
-
-      await writeTaskRuntime(taskId, {
-        phase: "",
-        context: {},
-        logs: [],
-        interaction: null,
-      });
-      await appendTaskLog(taskId, `任务已创建，工作流: ${runtimeWorkflow.name}`);
-      emitTaskBroadcast("task:update", task);
-
-      void executeTask(taskId);
-      return task;
-    }
-
-    case "task:subscribe": {
-      return null;
-    }
-
-    case "task:list": {
-      ensureDefaultWorkflows();
-      return getTasksFromStore().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    }
-
-    case "task:get": {
-      const taskId = asString(args.id);
-      const task = findTask(taskId);
-      const runtime = await readTaskRuntime(taskId);
-      const workflowGraph = task.workflowSnapshot ? normalizeWorkflowGraph(task.workflowSnapshot.graph) : null;
-      const rawGraphState = asRecord(runtime.context.graphState);
-      const pendingNodeId = asString(rawGraphState.pendingNodeId || runtime.context.pendingNodeId);
-      const executedNodeIds = Array.from(new Set(asStringArray(rawGraphState.executedNodeIds)));
-      return {
-        task,
-        logs: runtime.logs,
-        interactionRequest: runtime.interaction,
-        workflowGraph,
-        graphProgress: {
-          phase: runtime.phase,
-          executedNodeIds,
-          pendingNodeId,
-          totalNodes: workflowGraph?.nodes.length || 0,
-        },
-      };
-    }
-
-    case "task:cancel": {
-      const taskId = asString(args.id);
-      const task = findTask(taskId);
-      if (task.status === "completed" || task.status === "failed" || task.status === "canceled") {
-        return task;
-      }
-      const updated = updateTask(taskId, {
-        status: "canceled",
-        finishedAt: toIsoNow(),
-        waitingInteraction: null,
-      });
-      const runtime = await readTaskRuntime(taskId);
-      runtime.interaction = null;
-      await writeTaskRuntime(taskId, runtime);
-      await appendTaskLog(taskId, "任务已取消", "warn");
-      return updated;
-    }
-
-    case "task:resume": {
-      const taskId = asString(args.id);
-      const payload = asRecord(args.payload);
-      const task = findTask(taskId);
-      if (task.status !== "waiting_input") {
-        throw new Error("任务当前不在等待人工输入状态");
-      }
-      updateTask(taskId, {
-        status: "running",
-      });
-      void executeTask(taskId, payload);
-      return findTask(taskId);
-    }
-
-    case "task:remove": {
-      const taskId = asString(args.id);
-      const existing = tryFindTask(taskId);
-      if (!existing) {
-        return {
-          id: taskId,
-          removed: false,
-        };
-      }
-      removedTaskIds.add(taskId);
-      removeTaskFromStore(taskId);
-      await waitTaskLogQueue(taskId);
-      taskLogQueues.delete(taskId);
-      await deleteTaskRuntime(taskId);
-      return {
-        id: taskId,
-        removed: true,
-      };
-    }
-
-    case "task:clear-completed": {
-      const tasks = getTasksFromStore();
-      const completedIds = tasks.filter((item) => item.status === "completed").map((item) => item.id);
-      if (completedIds.length === 0) {
-        return { count: 0, ids: [] as string[] };
-      }
-
-      const remaining = tasks.filter((item) => item.status !== "completed");
-      setTasksToStore(remaining);
-
-      for (const taskId of completedIds) {
-        removedTaskIds.add(taskId);
-        await waitTaskLogQueue(taskId);
-        taskLogQueues.delete(taskId);
-        await deleteTaskRuntime(taskId);
-        emitTaskBroadcast("task:removed", { taskId });
-      }
-
-      return {
-        count: completedIds.length,
-        ids: completedIds,
-      };
-    }
-
-    case "concat_videos": {
-      const concatParams = {
-        inputDir: asString(args.inputDir),
-        startingVideo: args.startingVideo ? asString(args.startingVideo) : null,
-        endingVideo: args.endingVideo ? asString(args.endingVideo) : null,
-        randomCountMin: Math.round(asNumber(args.randomCountMin)),
-        randomCountMax: Math.round(asNumber(args.randomCountMax)),
-        maxDepth: Math.round(asNumber(args.maxDepth)),
-        runTimes: Math.round(asNumber(args.runTimes)),
-        outputDir: asString(args.outputDir),
-        ...(Array.isArray(args.files) ? { files: args.files.map((item) => String(item)) } : {}),
-      };
-      const result = await concatVideosInternal(sender, concatParams);
-      return result.message;
-    }
-
-    case "concat_videos_with_reencode": {
-      const concatParams = {
-        inputDir: asString(args.inputDir),
-        startingVideo: args.startingVideo ? asString(args.startingVideo) : null,
-        endingVideo: args.endingVideo ? asString(args.endingVideo) : null,
-        randomCountMin: Math.round(asNumber(args.randomCountMin)),
-        randomCountMax: Math.round(asNumber(args.randomCountMax)),
-        maxDepth: Math.round(asNumber(args.maxDepth)),
-        runTimes: Math.round(asNumber(args.runTimes)),
-        outputDir: asString(args.outputDir),
-        ...(Array.isArray(args.files) ? { files: args.files.map((item) => String(item)) } : {}),
-      };
-      const result = await concatVideosInternal(sender, concatParams);
-      return result.message;
-    }
-
-    case "get_video_metadata": {
-      return getVideoMetadataInternal(asString(args.videoPath));
-    }
-
-    case "extract_all_frames": {
-      const { frames } = await extractAllFramesInternal(sender, asString(args.videoPath), true);
-      return frames;
-    }
-
-    case "generate_video_segments": {
-      return generateVideoSegmentsInternal(
-        sender,
-        asString(args.videoPath),
-        asSegments(args.segments),
-        asString(args.outputDir),
-      );
-    }
-
-    case "list_mp4_files": {
-      return listMp4Files(asString(args.dirPath));
-    }
-
-    case "load_batch_progress": {
-      const progressPath = asString(args.progressPath);
-      if (!(await fileExists(progressPath))) {
-        return null;
-      }
-      const content = await fsp.readFile(progressPath, "utf8");
-      return JSON.parse(content) as BatchProgress;
-    }
-
-    case "save_batch_progress": {
-      const progressPath = asString(args.progressPath);
-      const progress = args.progress as BatchProgress;
-      await fsp.writeFile(progressPath, JSON.stringify(progress, null, 2), "utf8");
-      return null;
-    }
-
-    case "delete_video_file": {
-      const filePath = asString(args.filePath);
-      if (!(await fileExists(filePath))) {
-        throw new Error("文件不存在");
-      }
-      await fsp.rm(filePath);
-      return null;
-    }
-
-    case "auto_split_video": {
-      return autoSplitVideoInternal(sender, {
-        videoPath: asString(args.videoPath),
-        outputDir: asString(args.outputDir),
-        algorithm: asString(args.algorithm),
-        threshold: asNumber(args.threshold),
-        minDuration: asNumber(args.minDuration),
-        skipFirst: asBoolean(args.skipFirst),
-        skipLast: asBoolean(args.skipLast),
-      });
-    }
-
-    case "remove_ending_and_concat": {
-      return removeEndingAndConcatInternal(sender, {
-        videoPath: asString(args.videoPath),
-        outputDir: asString(args.outputDir),
-        algorithm: asString(args.algorithm),
-        threshold: asNumber(args.threshold),
-        minDuration: asNumber(args.minDuration),
-        newEndingVideo: args.newEndingVideo ? asString(args.newEndingVideo) : null,
-        shuffleSegments: asBoolean(args.shuffleSegments),
-      });
-    }
-
-    case "batch_download": {
-      const urls = Array.isArray(args.urls) ? args.urls.map((url) => String(url)).filter(Boolean) : [];
-      const outputDir = asString(args.outputDir);
-      const maxConcurrent = Math.max(1, Math.round(asNumber(args.maxConcurrent) || 3));
-
-      await ensureDir(outputDir);
-
-      const { success, failed } = await runWithConcurrency(urls, maxConcurrent, async (url) => {
-        await downloadSingleFile(sender, url, outputDir);
-      });
-
-      return `下载完成！成功: ${String(success)}, 失败: ${String(failed)}`;
-    }
-
-    default:
-      throw new Error(`未知命令: ${command}`);
-  }
+  return invokeWorkflowTaskCommand(command, args, {
+    ensureDefaultWorkflows,
+    workflowToMeta,
+    getWorkflowById,
+    findSystemWorkflowDefinition,
+    createSystemWorkflowDefinitions,
+    assertWorkflowNameUnique,
+    normalizeWorkflowName,
+    createEmptyGraph,
+    createRunDir,
+    toIsoNow,
+    ensureDir,
+    getWorkflowsFromStore,
+    setWorkflowsToStore,
+    getTasksFromStore,
+    setTasksToStore,
+    writeTaskRuntime,
+    readTaskRuntime,
+    deleteTaskRuntime,
+    tryFindTask,
+    findTask,
+    removeTaskFromStore,
+    waitTaskLogQueue,
+    updateTask,
+    appendTaskLog,
+    emitTaskBroadcast,
+    executeTask,
+    removedTaskIds,
+    taskLogQueues,
+  });
 }

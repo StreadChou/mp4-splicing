@@ -78,8 +78,18 @@
         <div class="panel-title">属性面板</div>
 
         <template v-if="selectedNode">
-          <div class="text-subtitle2 text-grey-2">{{ selectedNode.data?.label || selectedNode.id }}</div>
+          <div class="text-subtitle2 text-grey-2">{{ selectedNodeDisplayTitle }}</div>
           <div class="text-caption text-grey-5 q-mt-xs">类型: {{ selectedNode.data?.nodeType || "custom" }}</div>
+          <q-input
+            class="q-mt-sm"
+            dense
+            outlined
+            dark
+            label="备注(可选)"
+            :disable="readonly"
+            :model-value="selectedNode.data?.remark || ''"
+            @update:model-value="updateSelectedNodeRemark"
+          />
           <q-separator class="q-my-sm" />
 
           <div class="text-caption text-grey-4">节点作用</div>
@@ -92,9 +102,10 @@
             v-for="input in selectedNodeInputsDoc"
             :key="`doc-in-${input.name}`"
             class="doc-row q-mt-xs"
+            :title="`${input.label} (${input.name})\n类型: ${input.typeText}\n${input.description}`"
           >
-            <span class="doc-port">{{ input.name }}</span>
-            <span class="doc-desc">[{{ input.valueType }}] {{ input.description }}</span>
+            <span class="doc-port">{{ input.label }}</span>
+            <span class="doc-desc">[{{ input.typeText }}] {{ input.description }}</span>
           </div>
 
           <div class="text-caption text-grey-4 q-mt-md">输出端点说明</div>
@@ -102,9 +113,10 @@
             v-for="output in selectedNodeOutputsDoc"
             :key="`doc-out-${output.name}`"
             class="doc-row q-mt-xs"
+            :title="`${output.label} (${output.name})\n类型: ${output.typeText}\n${output.description}`"
           >
-            <span class="doc-port">{{ output.name }}</span>
-            <span class="doc-desc">[{{ output.valueType }}] {{ output.description }}</span>
+            <span class="doc-port">{{ output.label }}</span>
+            <span class="doc-desc">[{{ output.typeText }}] {{ output.description }}</span>
           </div>
 
           <q-banner dense rounded class="bg-grey-9 text-grey-4 q-mt-md">
@@ -117,7 +129,7 @@
         </template>
 
         <template v-else-if="selectedEdge">
-          <div class="text-caption text-grey-5">连线：{{ selectedEdge.source }} -> {{ selectedEdge.target }}</div>
+          <div class="text-caption text-grey-5">连线：{{ selectedEdgeDisplayTitle }}</div>
           <q-btn class="q-mt-sm" color="negative" flat dense label="删除连线" :disable="readonly" @click="removeSelectedEdge" />
         </template>
 
@@ -144,7 +156,12 @@ import {
   PORT_VALUE_TYPES,
   WORKFLOW_NODE_MACRO_MAP,
   WORKFLOW_NODE_MACROS,
+  WORKFLOW_NODE_PORT_TEMPLATES,
+  formatPortTypeText,
 } from "src/shared/workflow-node-macros";
+import type { PortDataType } from "src/shared/nodes";
+import { arePortSpecsCompatible } from "src/shared/nodes";
+import { getNodeDefinition } from "src/shared/nodes";
 import ComfyNode from "./ComfyNode.vue";
 import type { WorkflowGraph, WorkflowGraphNode } from "./types";
 
@@ -155,8 +172,13 @@ interface NodeTemplate {
   outputs: string[];
 }
 
+interface PortTypeSpecView {
+  valueType: PortDataType;
+  multiple: boolean;
+}
+
 interface NodeData {
-  label: string;
+  remark?: string;
   nodeType: string;
   nodeTypeLabel: string;
   inputs: string[];
@@ -215,28 +237,163 @@ const selectedNodeMacro = computed(() => {
   const nodeType = selectedNode.value?.data?.nodeType || "";
   return WORKFLOW_NODE_MACRO_MAP[nodeType];
 });
+const selectedNodeDisplayTitle = computed(() => {
+  if (!selectedNode.value?.data) {
+    return "";
+  }
+  return formatNodeDisplayTitle(selectedNode.value.data.remark, selectedNode.value.data.nodeTypeLabel);
+});
+const selectedEdgeDisplayTitle = computed(() => {
+  if (!selectedEdge.value) {
+    return "";
+  }
+  const sourceNode = flowNodes.value.find((node) => node.id === selectedEdge.value?.source);
+  const targetNode = flowNodes.value.find((node) => node.id === selectedEdge.value?.target);
+  const sourceTitle = sourceNode?.data
+    ? formatNodeDisplayTitle(sourceNode.data.remark, sourceNode.data.nodeTypeLabel)
+    : selectedEdge.value.source;
+  const targetTitle = targetNode?.data
+    ? formatNodeDisplayTitle(targetNode.data.remark, targetNode.data.nodeTypeLabel)
+    : selectedEdge.value.target;
+  return `${sourceTitle} -> ${targetTitle}`;
+});
+
+function formatNodeDisplayTitle(remark: unknown, typeLabel: string): string {
+  const text = typeof remark === "string" ? remark.trim() : "";
+  if (!text) {
+    return typeLabel;
+  }
+  return `${text}(${typeLabel})`;
+}
 
 function mapPortDocs(
   ports: string[],
-  docs: Array<{ name: string; valueType: string; description: string }> | undefined,
-): Array<{ name: string; valueType: string; description: string }> {
+  nodeId: string,
+  nodeType: string,
+  direction: "input" | "output",
+  docs: Array<{ name: string; label: string; valueType: string; multiple: boolean; typeText: string; description: string }> | undefined,
+): Array<{ name: string; label: string; valueType: string; multiple: boolean; typeText: string; description: string }> {
   const docMap = new Map((docs ?? []).map((item) => [item.name, item]));
   return ports.map((name) => ({
+    ...resolvePortTypeDoc(nodeId, nodeType, direction, name),
     name,
-    valueType: docMap.get(name)?.valueType || PORT_VALUE_TYPES.ANY_PAYLOAD,
+    label: docMap.get(name)?.label || resolvePortTypeDoc(nodeId, nodeType, direction, name).label,
     description: docMap.get(name)?.description || "该端口用于与其它节点连线传递数据。",
   }));
 }
 
 const selectedNodeInputsDoc = computed(() => {
+  if (!selectedNode.value?.data) {
+    return [];
+  }
   const ports = selectedNode.value?.data?.inputs || [];
-  return mapPortDocs(ports, selectedNodeMacro.value?.inputs);
+  return mapPortDocs(ports, selectedNode.value.id, selectedNode.value.data.nodeType, "input", selectedNodeMacro.value?.inputs);
 });
 
 const selectedNodeOutputsDoc = computed(() => {
+  if (!selectedNode.value?.data) {
+    return [];
+  }
   const ports = selectedNode.value?.data?.outputs || [];
-  return mapPortDocs(ports, selectedNodeMacro.value?.outputs);
+  return mapPortDocs(ports, selectedNode.value.id, selectedNode.value.data.nodeType, "output", selectedNodeMacro.value?.outputs);
 });
+
+function resolvePortTypeSpecBase(nodeType: string, direction: "input" | "output", portName: string): PortTypeSpecView {
+  const macro = WORKFLOW_NODE_MACRO_MAP[nodeType];
+  if (!macro) {
+    return {
+      valueType: PORT_VALUE_TYPES.ANY_PAYLOAD as PortDataType,
+      multiple: false,
+    };
+  }
+  const ports = direction === "input" ? macro.inputs : macro.outputs;
+  const found = ports.find((port) => port.name === portName);
+  return {
+    valueType: (found?.valueType || PORT_VALUE_TYPES.ANY_PAYLOAD) as PortDataType,
+    multiple: found?.multiple === true,
+  };
+}
+
+function resolvePortLabel(nodeType: string, direction: "input" | "output", portName: string): string {
+  const macro = WORKFLOW_NODE_MACRO_MAP[nodeType];
+  if (!macro) {
+    return portName;
+  }
+  const ports = direction === "input" ? macro.inputs : macro.outputs;
+  return ports.find((port) => port.name === portName)?.label || portName;
+}
+
+function resolvePortTypeSpec(
+  nodeId: string,
+  nodeType: string,
+  direction: "input" | "output",
+  portName: string,
+): PortTypeSpecView {
+  const base = resolvePortTypeSpecBase(nodeType, direction, portName);
+
+  const incomingEdge = flowEdges.value.find((edge) => {
+    if (edge.target !== nodeId) {
+      return false;
+    }
+    const targetPorts = WORKFLOW_NODE_PORT_TEMPLATES[nodeType]?.inputs || [];
+    const resolvedTargetPort = resolveHandlePortName(edge.targetHandle, targetPorts, "in", targetPorts[0] || "input");
+    if (nodeType === "iterate" && portName === "items") {
+      return resolvedTargetPort === "items";
+    }
+    if (nodeType === "repeat" && portName === "raw") {
+      return resolvedTargetPort === "raw";
+    }
+    return false;
+  });
+
+  if (!incomingEdge) {
+    return base;
+  }
+
+  const sourceNode = flowNodes.value.find((node) => node.id === incomingEdge.source);
+  if (!sourceNode?.data) {
+    return base;
+  }
+  const sourcePorts = WORKFLOW_NODE_PORT_TEMPLATES[sourceNode.data.nodeType]?.outputs || [];
+  const sourcePort = resolveHandlePortName(incomingEdge.sourceHandle, sourcePorts, "out", sourcePorts[0] || "result");
+  const sourceSpec = resolvePortTypeSpecBase(sourceNode.data.nodeType, "output", sourcePort);
+
+  if (nodeType === "iterate") {
+    if (direction === "output" && portName === "item") {
+      return { valueType: sourceSpec.valueType, multiple: false };
+    }
+    if (direction === "output" && portName === "raw") {
+      return { valueType: sourceSpec.valueType, multiple: true };
+    }
+    if (direction === "input" && portName === "items") {
+      return { valueType: sourceSpec.valueType, multiple: true };
+    }
+  }
+
+  if (nodeType === "repeat" && portName === "raw") {
+    return {
+      valueType: sourceSpec.valueType,
+      multiple: sourceSpec.multiple,
+    };
+  }
+
+  return base;
+}
+
+function resolvePortTypeDoc(nodeId: string, nodeType: string, direction: "input" | "output", portName: string): {
+  valueType: string;
+  multiple: boolean;
+  typeText: string;
+  label: string;
+} {
+  const spec = resolvePortTypeSpec(nodeId, nodeType, direction, portName);
+  return {
+    label: resolvePortLabel(nodeType, direction, portName),
+    valueType: spec.valueType,
+    multiple: spec.multiple,
+    typeText: formatPortTypeText(spec.valueType, spec.multiple),
+  };
+}
 
 function resolveHandlePortName(
   handleName: string | null | undefined,
@@ -261,21 +418,11 @@ function resolveHandlePortName(
   return effectivePorts[0] as string;
 }
 
-function resolvePortValueType(nodeType: string, direction: "input" | "output", portName: string): string {
-  const macro = WORKFLOW_NODE_MACRO_MAP[nodeType];
-  if (!macro) {
-    return PORT_VALUE_TYPES.ANY_PAYLOAD;
-  }
-  const ports = direction === "input" ? macro.inputs : macro.outputs;
-  return ports.find((port) => port.name === portName)?.valueType || PORT_VALUE_TYPES.ANY_PAYLOAD;
-}
-
-function isPortValueTypeCompatible(sourceType: string, targetType: string): boolean {
-  return (
-    sourceType === targetType ||
-    sourceType === PORT_VALUE_TYPES.ANY_PAYLOAD ||
-    targetType === PORT_VALUE_TYPES.ANY_PAYLOAD
-  );
+function isPortValueTypeCompatible(
+  source: { valueType: PortDataType; multiple: boolean },
+  target: { valueType: PortDataType; multiple: boolean },
+): boolean {
+  return arePortSpecsCompatible(source, target);
 }
 
 const defaultEdgeOptions = {
@@ -309,67 +456,88 @@ function getTemplateByType(type: string): NodeTemplate {
 }
 
 function defaultConfigByNodeType(type: string): Record<string, unknown> {
-  if (type === "file") {
-    return {
-      action: "read_mp4",
-      recursive: true,
-      maxDepth: 2,
-    };
-  }
-  if (type === "video") {
-    return {
-      action: "split_profile",
-      algorithm: "ssim",
-      threshold: 0.7,
-      minDuration: 2,
-      skipFirst: false,
-      skipLast: true,
-    };
-  }
-  if (type === "select_video") {
-    return {
-      videoPath: "",
-      required: false,
-    };
-  }
-  if (type === "random_concat") {
-    return {
-      randomCountMin: 2,
-      randomCountMax: 4,
-      runTimes: 1,
-    };
-  }
-  if (type === "remove_ending") {
-    return {
-      shuffleSegments: false,
-    };
-  }
-  if (type === "network") {
-    return {
-      action: "batch_download",
-      asyncDownload: true,
-      maxConcurrent: 3,
-    };
-  }
-  if (type === "text_split") {
-    return {
-      mode: "newline",
-      trim: true,
-      removeEmpty: true,
-    };
-  }
-  if (type === "user_input") {
-    return {
-      text: "",
-    };
-  }
-  return {};
+  const definition = getNodeDefinition(type);
+  return { ...(definition?.defaults || {}) };
 }
 
 function defaultPosition(index: number): { x: number; y: number } {
   return {
     x: 80 + (index % 3) * 420,
     y: 90 + Math.floor(index / 3) * 260,
+  };
+}
+
+function normalizeTypeIdPrefix(nodeType: string): string {
+  const normalized = nodeType.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized || "node";
+}
+
+function getNextNodeId(nodeType: string): string {
+  const prefix = normalizeTypeIdPrefix(nodeType);
+  let maxIndex = 0;
+  const matcher = new RegExp(`^${prefix}_(\\d+)$`);
+  for (const node of flowNodes.value) {
+    const match = node.id.match(matcher);
+    if (match) {
+      const index = Number(match[1]);
+      if (Number.isFinite(index) && index > maxIndex) {
+        maxIndex = index;
+      }
+      continue;
+    }
+    if (node.id === prefix) {
+      maxIndex = Math.max(maxIndex, 1);
+    }
+  }
+  return `${prefix}_${String(maxIndex + 1)}`;
+}
+
+function canonicalizeGraphNodeIds(graph: WorkflowGraph): WorkflowGraph {
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const counters = new Map<string, number>();
+  const idMap = new Map<string, string>();
+
+  const normalizedNodes = nodes.map((node, idx) => {
+    const type = typeof node.type === "string" && node.type.trim() ? node.type : "custom";
+    const prefix = normalizeTypeIdPrefix(type);
+    const nextIndex = (counters.get(prefix) || 0) + 1;
+    counters.set(prefix, nextIndex);
+
+    const oldId = typeof node.id === "string" && node.id.trim() ? node.id : `node_${String(idx + 1)}`;
+    const id = `${prefix}_${String(nextIndex)}`;
+    idMap.set(oldId, id);
+
+    return {
+      ...node,
+      id,
+      type,
+    };
+  });
+
+  const nodeIdSet = new Set(normalizedNodes.map((node) => node.id));
+  const normalizedEdges = edges
+    .map((edge, idx) => {
+      const mappedSource = idMap.get(edge.source);
+      const mappedTarget = idMap.get(edge.target);
+      if (!mappedSource || !mappedTarget) {
+        return null;
+      }
+      if (!nodeIdSet.has(mappedSource) || !nodeIdSet.has(mappedTarget)) {
+        return null;
+      }
+      return {
+        ...edge,
+        id: edge.id || `edge_${String(idx + 1)}`,
+        source: mappedSource,
+        target: mappedTarget,
+      };
+    })
+    .filter((edge): edge is WorkflowGraph["edges"][number] => edge !== null);
+
+  return {
+    nodes: normalizedNodes,
+    edges: normalizedEdges,
   };
 }
 
@@ -458,14 +626,14 @@ async function pickVideoForNode(nodeId: string, configKey: string) {
 
 function buildNodeData(
   nodeId: string,
-  label: string,
+  remark: string | undefined,
   nodeType: string,
   inputs: string[],
   outputs: string[],
   config: Record<string, unknown>,
 ): NodeData {
   return {
-    label,
+    remark,
     nodeType,
     nodeTypeLabel: getTemplateByType(nodeType).label,
     inputs,
@@ -496,7 +664,7 @@ function graphNodeToFlowNode(node: WorkflowGraphNode, index: number): Node<NodeD
     position: { x, y },
     data: buildNodeData(
       node.id,
-      node.label,
+      node.remark,
       node.type,
       [...template.inputs],
       [...template.outputs],
@@ -506,13 +674,11 @@ function graphNodeToFlowNode(node: WorkflowGraphNode, index: number): Node<NodeD
 }
 
 function toGraph(): WorkflowGraph {
-  return {
+  const rawGraph: WorkflowGraph = {
     nodes: flowNodes.value.map((node) => ({
       id: node.id,
       type: node.data?.nodeType || "custom",
-      label: node.data?.label || node.id,
-      inputs: node.data?.inputs || ["in"],
-      outputs: node.data?.outputs || ["out"],
+      ...(node.data?.remark ? { remark: node.data.remark } : {}),
       config: node.data?.config || {},
       position: {
         x: node.position.x,
@@ -534,6 +700,7 @@ function toGraph(): WorkflowGraph {
       return nextEdge;
     }),
   };
+  return canonicalizeGraphNodeIds(rawGraph);
 }
 
 function emitGraph() {
@@ -557,9 +724,10 @@ function clearSelection() {
 }
 
 function syncFromModel(graph: WorkflowGraph) {
+  const canonicalGraph = canonicalizeGraphNodeIds(graph);
   syncingFromProps = true;
-  flowNodes.value = (graph.nodes || []).map((node, idx) => graphNodeToFlowNode(node, idx));
-  flowEdges.value = (graph.edges || []).map((edge) => ({
+  flowNodes.value = (canonicalGraph.nodes || []).map((node, idx) => graphNodeToFlowNode(node, idx));
+  flowEdges.value = (canonicalGraph.edges || []).map((edge) => ({
     id: edge.id,
     type: "default",
     source: edge.source,
@@ -608,10 +776,14 @@ function onConnect(connection: Connection) {
     "in",
     targetNode.data.inputs?.[0] || sourcePort || "input",
   );
-  const sourceValueType = resolvePortValueType(sourceNode.data.nodeType, "output", sourcePort);
-  const targetValueType = resolvePortValueType(targetNode.data.nodeType, "input", targetPort);
-  if (!isPortValueTypeCompatible(sourceValueType, targetValueType)) {
-    errorMsg.value = `连线失败：${sourceNode.data.label}.${sourcePort}[${sourceValueType}] 与 ${targetNode.data.label}.${targetPort}[${targetValueType}] 类型不兼容`;
+  const sourceTypeSpec = resolvePortTypeSpec(sourceNode.id, sourceNode.data.nodeType, "output", sourcePort);
+  const targetTypeSpec = resolvePortTypeSpec(targetNode.id, targetNode.data.nodeType, "input", targetPort);
+  if (!isPortValueTypeCompatible(sourceTypeSpec, targetTypeSpec)) {
+    const sourceName = sourceNode.data.remark || sourceNode.data.nodeTypeLabel || sourceNode.id;
+    const targetName = targetNode.data.remark || targetNode.data.nodeTypeLabel || targetNode.id;
+    const sourceTypeText = formatPortTypeText(sourceTypeSpec.valueType, sourceTypeSpec.multiple);
+    const targetTypeText = formatPortTypeText(targetTypeSpec.valueType, targetTypeSpec.multiple);
+    errorMsg.value = `连线失败：${sourceName}.${sourcePort}[${sourceTypeText}] 与 ${targetName}.${targetPort}[${targetTypeText}] 类型不兼容`;
     return;
   }
   errorMsg.value = "";
@@ -637,7 +809,7 @@ function addNode(template: NodeTemplate) {
   }
 
   const index = flowNodes.value.length;
-  const nodeId = `node_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  const nodeId = getNextNodeId(template.type);
   flowNodes.value = [
     ...flowNodes.value,
     {
@@ -646,7 +818,7 @@ function addNode(template: NodeTemplate) {
       position: defaultPosition(index),
       data: buildNodeData(
         nodeId,
-        `${template.label}${String(index + 1)}`,
+        "",
         template.type,
         [...template.inputs],
         [...template.outputs],
@@ -699,6 +871,17 @@ function zoomOut() {
 
 function fitView() {
   flowRef.value?.fitView?.();
+}
+
+function updateSelectedNodeRemark(value: string | number | null) {
+  if (readonly.value || !selectedNode.value) {
+    return;
+  }
+  const remark = typeof value === "string" ? value : value == null ? "" : String(value);
+  updateNodeData(selectedNode.value.id, (oldData) => ({
+    ...oldData,
+    remark,
+  }));
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {

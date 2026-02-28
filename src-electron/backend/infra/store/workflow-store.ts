@@ -26,6 +26,14 @@ export function getWorkflowsFromStore(): WorkflowDefinition[] {
   return (getWorkflowStore().get("workflows") ?? []) as WorkflowDefinition[];
 }
 
+export function getWorkflowSchemaVersion(): number {
+  return Number(getWorkflowStore().get("schemaVersion") ?? 0);
+}
+
+export function setWorkflowSchemaVersion(version: number): void {
+  getWorkflowStore().set("schemaVersion", version);
+}
+
 export function setWorkflowsToStore(workflows: WorkflowDefinition[]): void {
   getWorkflowStore().set("workflows", workflows);
 }
@@ -38,3 +46,9 @@ export function setTasksToStore(tasks: WorkflowTaskRecord[]): void {
   getWorkflowStore().set("tasks", tasks);
 }
 
+export function resetWorkflowStore(): void {
+  const store = getWorkflowStore();
+  store.set("schemaVersion", WORKFLOW_SCHEMA_VERSION);
+  store.set("workflows", []);
+  store.set("tasks", []);
+}

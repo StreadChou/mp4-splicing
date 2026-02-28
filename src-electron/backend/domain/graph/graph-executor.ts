@@ -1,5 +1,7 @@
 import type { WebContents } from "electron";
+import { WORKFLOW_NODE_PORT_TEMPLATES } from "../../../../src/shared/workflow-node-macros";
 import { executeGraphNode, type NodeExecutionDeps } from "./node-execution";
+import { getGraphNodeLabel } from "./node-execution-helpers";
 import type {
   InteractionRequest,
   TaskRuntimeSnapshot,
@@ -86,7 +88,7 @@ function normalizeNodeOutputForResume(node: WorkflowGraphNode, rawValue: unknown
   if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
     return rawValue as Record<string, unknown>;
   }
-  const firstOutput = node.outputs?.[0] || "result";
+  const firstOutput = (WORKFLOW_NODE_PORT_TEMPLATES[node.type]?.outputs || [])[0] || "result";
   return {
     [firstOutput]: rawValue,
     result: rawValue,
@@ -127,6 +129,22 @@ function appendInputValue(payload: Record<string, unknown>, key: string, value: 
   payload[key] = [existing, value];
 }
 
+function appendLoopMeta(payload: Record<string, unknown>, sourceResult: Record<string, unknown>): void {
+  const rawMeta = sourceResult.__loop;
+  if (!rawMeta || typeof rawMeta !== "object" || Array.isArray(rawMeta)) {
+    return;
+  }
+  const currentMeta = payload.__loop;
+  if (!currentMeta || typeof currentMeta !== "object" || Array.isArray(currentMeta)) {
+    payload.__loop = rawMeta;
+    return;
+  }
+  payload.__loop = {
+    ...(currentMeta as Record<string, unknown>),
+    ...(rawMeta as Record<string, unknown>),
+  };
+}
+
 function buildNodeInputPayload(
   task: WorkflowTaskRecord,
   targetNode: WorkflowGraphNode,
@@ -140,12 +158,14 @@ function buildNodeInputPayload(
   for (const edge of incomingEdges) {
     const sourceNode = nodeMap.get(edge.source);
     const sourceResult = nodeOutputs[edge.source] || {};
-    const sourcePort = resolvePortName(edge.sourceHandle, sourceNode?.outputs, "out", "result");
+    const sourceOutputs = sourceNode ? WORKFLOW_NODE_PORT_TEMPLATES[sourceNode.type]?.outputs : undefined;
+    const targetInputs = WORKFLOW_NODE_PORT_TEMPLATES[targetNode.type]?.inputs;
+    const sourcePort = resolvePortName(edge.sourceHandle, sourceOutputs, "out", "result");
     const targetPort = resolvePortName(
       edge.targetHandle,
-      targetNode.inputs,
+      targetInputs,
       "in",
-      sourcePort || targetNode.inputs?.[0] || "input",
+      sourcePort || targetInputs?.[0] || "input",
     );
 
     let value = sourceResult[sourcePort];
@@ -160,6 +180,9 @@ function buildNodeInputPayload(
     }
     if (value !== undefined) {
       appendInputValue(payload, targetPort, value);
+    }
+    if (sourceNode && (sourceNode.type === "iterate" || sourceNode.type === "repeat")) {
+      appendLoopMeta(payload, sourceResult);
     }
   }
 
@@ -178,7 +201,7 @@ function normalizeResumePayload(node: WorkflowGraphNode, resumePayload: Record<s
       const parsed = JSON.parse(asString(resumePayload.payloadJson)) as unknown;
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const objectPayload = parsed as Record<string, unknown>;
-        const firstOutput = node.outputs?.[0] || "result";
+        const firstOutput = (WORKFLOW_NODE_PORT_TEMPLATES[node.type]?.outputs || [])[0] || "result";
         const normalizedPayload: Record<string, unknown> = {
           ...objectPayload,
           result: objectPayload,
@@ -195,7 +218,7 @@ function normalizeResumePayload(node: WorkflowGraphNode, resumePayload: Record<s
   }
 
   const objectPayload = asRecord(resumePayload);
-  const firstOutput = node.outputs?.[0] || "result";
+  const firstOutput = (WORKFLOW_NODE_PORT_TEMPLATES[node.type]?.outputs || [])[0] || "result";
   const normalizedPayload: Record<string, unknown> = {
     ...objectPayload,
     result: objectPayload,
@@ -249,7 +272,7 @@ export async function executeWorkflowGraph(
     await deps.clearWaitingInteraction(task.id);
     await deps.appendTaskLog(task.id, "已恢复人工输入，继续执行", "info", {
       nodeId: pendingNode.id,
-      nodeLabel: pendingNode.label,
+      nodeLabel: getGraphNodeLabel(pendingNode),
     });
   }
 
@@ -269,9 +292,9 @@ export async function executeWorkflowGraph(
     deps.updateTask(task.id, { currentNodeId: readyNode.id });
     const nodeLogMeta = {
       nodeId: readyNode.id,
-      nodeLabel: readyNode.label,
+      nodeLabel: getGraphNodeLabel(readyNode),
     };
-    await deps.appendTaskLog(task.id, `节点开始执行: ${readyNode.label} (${readyNode.type})`, "info", nodeLogMeta);
+    await deps.appendTaskLog(task.id, `节点开始执行: ${getGraphNodeLabel(readyNode)} (${readyNode.type})`, "info", nodeLogMeta);
 
     const payload = buildNodeInputPayload(task, readyNode, workflow, state.nodeOutputs);
     let result: Awaited<ReturnType<typeof executeGraphNode>>;

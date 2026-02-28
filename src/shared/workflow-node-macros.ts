@@ -1,363 +1,154 @@
+import { PortDataType, PortDirection, listNodeDefinitions } from "./nodes";
+
+/** 前端可识别的端口基础类型常量集合。 */
 export const PORT_VALUE_TYPES = {
-  ABSOLUTE_PATH: "AbsolutePath",
-  ABSOLUTE_PATH_LIST: "AbsolutePathList",
-  URL_TEXT_BLOCK: "UrlTextBlock",
-  URL_LIST: "UrlList",
-  COUNT: "Count",
-  COMPLETION_SIGNAL: "CompletionSignal",
-  RESULT_SUMMARY: "ResultSummary",
-  ANY_PAYLOAD: "AnyPayload",
-  JSON_OBJECT: "JsonObject",
+  /** 绝对路径。 */
+  ABSOLUTE_PATH: PortDataType.ABSOLUTE_PATH,
+  /** 纯文本。 */
+  PLAIN_TEXT: PortDataType.PLAIN_TEXT,
+  /** 数值计数。 */
+  COUNT: PortDataType.COUNT,
+  /** 完成信号。 */
+  COMPLETION_SIGNAL: PortDataType.COMPLETION_SIGNAL,
+  /** 结果摘要。 */
+  RESULT_SUMMARY: PortDataType.RESULT_SUMMARY,
+  /** 任意数据。 */
+  ANY_PAYLOAD: PortDataType.ANY_PAYLOAD,
+  /** JSON 对象。 */
+  JSON_OBJECT: PortDataType.JSON_OBJECT,
+  /** 视频拆解算法配置。 */
+  VIDEO_SPLIT_ALGORITHM: PortDataType.VIDEO_SPLIT_ALGORITHM,
 } as const;
 
+/** 端口值类型联合。 */
 export type PortValueType = (typeof PORT_VALUE_TYPES)[keyof typeof PORT_VALUE_TYPES];
 
+/** 工作流端口宏定义（供前端展示/校验）。 */
 export interface WorkflowNodePortMacro {
+  /** 端口键名。 */
   name: string;
+  /** 端口中文显示名。 */
+  label: string;
+  /** 端口基础类型。 */
   valueType: PortValueType;
+  /** 是否数组包装。 */
+  multiple: boolean;
+  /** 类型展示文本（例如：纯文本[]）。 */
+  typeText: string;
+  /** 端口说明文案。 */
   description: string;
 }
 
+/** 工作流节点宏定义（由节点实体映射而来）。 */
 export interface WorkflowNodeMacro {
+  /** 节点类型。 */
   type: string;
+  /** 节点显示名称。 */
   label: string;
+  /** 节点摘要。 */
   summary: string;
+  /** 输入端口宏。 */
   inputs: WorkflowNodePortMacro[];
+  /** 输出端口宏。 */
   outputs: WorkflowNodePortMacro[];
+  /** 是否显示在面板。 */
   palette?: boolean;
 }
 
-export const WORKFLOW_NODE_MACROS: WorkflowNodeMacro[] = [
-  {
-    type: "input_dir",
-    label: "输入目录",
-    summary: "用于让用户选择输入目录，常作为读取目录的来源。",
-    inputs: [],
-    outputs: [
-      {
-        name: "dir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "用户选择后的输入目录绝对路径。",
-      },
-    ],
-  },
-  {
-    type: "output_dir",
-    label: "输出目录",
-    summary: "用于让用户选择输出目录，后续节点会把产物写入该目录。",
-    inputs: [],
-    outputs: [
-      {
-        name: "outputDir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "用户选择后的输出目录绝对路径。",
-      },
-    ],
-  },
-  {
-    type: "user_input",
-    label: "用户输入",
-    summary: "用于输入多行文本（常见为 URL 列表），每行一条。",
-    inputs: [],
-    outputs: [
-      {
-        name: "text",
-        valueType: PORT_VALUE_TYPES.URL_TEXT_BLOCK,
-        description: "多行文本内容。",
-      },
-    ],
-  },
-  {
-    type: "text_split",
-    label: "文本拆数组",
-    summary: "将文本拆分为字符串数组，可按换行/逗号/空白/自定义分隔。",
-    inputs: [
-      {
-        name: "text",
-        valueType: PORT_VALUE_TYPES.URL_TEXT_BLOCK,
-        description: "待拆分文本。",
-      },
-    ],
-    outputs: [
-      {
-        name: "items",
-        valueType: PORT_VALUE_TYPES.URL_LIST,
-        description: "拆分后的字符串数组(Array<string>)。",
-      },
-      {
-        name: "count",
-        valueType: PORT_VALUE_TYPES.COUNT,
-        description: "拆分后的条目数量。",
-      },
-    ],
-  },
-  {
-    type: "file",
-    label: "读取目录",
-    summary: "读取目录中的 MP4 文件，支持递归和深度限制。",
-    inputs: [
-      {
-        name: "dir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "待读取目录绝对路径。",
-      },
-    ],
-    outputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "匹配到的 MP4 文件绝对路径数组。",
-      },
-      {
-        name: "count",
-        valueType: PORT_VALUE_TYPES.COUNT,
-        description: "匹配到的文件数量。",
-      },
-    ],
-  },
-  {
-    type: "network",
-    label: "批量下载",
-    summary: "批量下载节点，可设置是否并发与并发数。",
-    inputs: [
-      {
-        name: "urls",
-        valueType: PORT_VALUE_TYPES.URL_LIST,
-        description: "下载 URL 数组(Array<string>)。",
-      },
-      {
-        name: "outputDir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "下载输出目录绝对路径。",
-      },
-    ],
-    outputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "下载后文件绝对路径数组。",
-      },
-      {
-        name: "done",
-        valueType: PORT_VALUE_TYPES.COMPLETION_SIGNAL,
-        description: "下载流程完成信号。",
-      },
-    ],
-  },
-  {
-    type: "video",
-    label: "视频拆解参数",
-    summary: "输出可复用的视频拆解参数，也可直接执行自动拆解等动作。",
-    inputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "待处理视频绝对路径数组（执行动作时使用）。",
-      },
-      {
-        name: "outputDir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "处理输出目录绝对路径（执行动作时使用）。",
-      },
-      {
-        name: "splitConfig",
-        valueType: PORT_VALUE_TYPES.JSON_OBJECT,
-        description: "上游传入的拆解参数对象（可覆盖本节点同名配置）。",
-      },
-    ],
-    outputs: [
-      {
-        name: "result",
-        valueType: PORT_VALUE_TYPES.RESULT_SUMMARY,
-        description: "执行结果摘要（不同动作的执行状态与统计信息）。",
-      },
-      {
-        name: "splitConfig",
-        valueType: PORT_VALUE_TYPES.JSON_OBJECT,
-        description: "标准化后的拆解参数对象，可复用于其它节点。",
-      },
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "执行后产出的文件绝对路径数组（动作不产出文件时为空）。",
-      },
-    ],
-  },
-  {
-    type: "select_video",
-    label: "选择视频",
-    summary: "选择单个固定视频，常用于随机拼接的固定开头/固定结尾。",
-    inputs: [],
-    outputs: [
-      {
-        name: "videoPath",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "选择后的视频绝对路径。",
-      },
-    ],
-  },
-  {
-    type: "random_concat",
-    label: "随机拼接",
-    summary: "从输入视频列表中随机抽取并拼接，可选固定开头/固定结尾。",
-    inputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "候选视频绝对路径数组。",
-      },
-      {
-        name: "startVideo",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "固定开头视频绝对路径（可选）。",
-      },
-      {
-        name: "endVideo",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "固定结尾视频绝对路径（可选）。",
-      },
-      {
-        name: "outputDir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "拼接输出目录绝对路径。",
-      },
-    ],
-    outputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "本节点生成的视频绝对路径数组。",
-      },
-      {
-        name: "result",
-        valueType: PORT_VALUE_TYPES.RESULT_SUMMARY,
-        description: "拼接结果摘要文本。",
-      },
-    ],
-  },
-  {
-    type: "remove_ending",
-    label: "去结尾",
-    summary: "根据拆解参数识别片段并移除结尾后重组视频。",
-    inputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "待处理视频绝对路径数组。",
-      },
-      {
-        name: "splitConfig",
-        valueType: PORT_VALUE_TYPES.JSON_OBJECT,
-        description: "来自视频拆解参数节点的拆解算法配置。",
-      },
-      {
-        name: "outputDir",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "处理输出目录绝对路径。",
-      },
-      {
-        name: "newEndingVideo",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH,
-        description: "可选的新结尾视频绝对路径。",
-      },
-    ],
-    outputs: [
-      {
-        name: "files",
-        valueType: PORT_VALUE_TYPES.ABSOLUTE_PATH_LIST,
-        description: "去结尾后生成的视频绝对路径数组。",
-      },
-      {
-        name: "result",
-        valueType: PORT_VALUE_TYPES.RESULT_SUMMARY,
-        description: "处理结果摘要文本。",
-      },
-    ],
-  },
-  {
-    type: "control",
-    label: "流程控制",
-    summary: "流程控制与数据路由节点。",
-    inputs: [
-      {
-        name: "in",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "上游透传数据。",
-      },
-    ],
-    outputs: [
-      {
-        name: "out",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "控制后的输出数据。",
-      },
-    ],
-  },
-  {
-    type: "custom",
-    label: "自定义",
-    summary: "自定义透传节点，可作为扩展占位。",
-    inputs: [
-      {
-        name: "in",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "上游透传数据。",
-      },
-    ],
-    outputs: [
-      {
-        name: "out",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "下游透传数据。",
-      },
-    ],
-  },
-  {
-    type: "human",
-    label: "人工处理",
-    summary: "运行时暂停并等待人工输入。",
-    inputs: [
-      {
-        name: "in",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "待人工确认/补充的上下文。",
-      },
-    ],
-    outputs: [
-      {
-        name: "out",
-        valueType: PORT_VALUE_TYPES.JSON_OBJECT,
-        description: "人工提交后的 JSON 数据。",
-      },
-    ],
-    palette: false,
-  },
-  {
-    type: "io",
-    label: "IO",
-    summary: "输入输出透传与字段提取节点。",
-    inputs: [
-      {
-        name: "in",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "待透传/提取的数据。",
-      },
-    ],
-    outputs: [
-      {
-        name: "out",
-        valueType: PORT_VALUE_TYPES.ANY_PAYLOAD,
-        description: "输出数据。",
-      },
-    ],
-    palette: false,
-  },
-];
+/** 端口名到中文显示名映射。 */
+const PORT_LABEL_MAP: Record<string, string> = {
+  items: "列表",
+  item: "子项",
+  raw: "原始数据",
+  index: "索引",
+  text: "文本",
+  count: "数量",
+  dir: "目录",
+  inputDir: "输入目录",
+  outputDir: "输出目录",
+  file: "文件",
+  files: "文件列表",
+  startVideo: "开头视频",
+  endVideo: "结尾视频",
+  splitAlgorithm: "拆解算法",
+  videoPath: "视频路径",
+  done: "完成信号",
+  result: "结果",
+  in: "输入",
+  out: "输出",
+  splitOutputDir: "拆解输出目录",
+};
 
+/** 基础类型到中文展示名映射。 */
+const BASE_TYPE_TEXT: Record<PortDataType, string> = {
+  [PortDataType.ABSOLUTE_PATH]: "绝对路径",
+  [PortDataType.PLAIN_TEXT]: "纯文本",
+  [PortDataType.COUNT]: "数值",
+  [PortDataType.COMPLETION_SIGNAL]: "完成信号",
+  [PortDataType.RESULT_SUMMARY]: "结果摘要",
+  [PortDataType.ANY_PAYLOAD]: "任意数据",
+  [PortDataType.JSON_OBJECT]: "JSON对象",
+  [PortDataType.VIDEO_SPLIT_ALGORITHM]: "视频拆解算法",
+};
+
+/** 将端口类型格式化为展示文本（支持数组后缀）。 */
+export function formatPortTypeText(valueType: PortDataType, multiple = false): string {
+  const base = BASE_TYPE_TEXT[valueType] || "未知类型";
+  return multiple ? `${base}[]` : base;
+}
+
+/** 解析端口显示名：优先使用显式 label，其次使用映射，最后回退 name。 */
+function resolvePortLabel(name: string, label?: string): string {
+  if (label && label.trim()) {
+    return label.trim();
+  }
+  return PORT_LABEL_MAP[name] || name;
+}
+
+/** 将节点端口定义映射为前端宏结构。 */
+function mapPortMacro(port: {
+  /** 端口键名。 */
+  name: string;
+  /** 端口显示名（可选）。 */
+  label?: string;
+  /** 端口基础类型。 */
+  valueType: PortDataType;
+  /** 是否数组包装。 */
+  multiple?: boolean;
+  /** 端口说明。 */
+  description: string;
+}): WorkflowNodePortMacro {
+  const multiple = port.multiple === true;
+  return {
+    name: port.name,
+    label: resolvePortLabel(port.name, port.label),
+    valueType: port.valueType,
+    multiple,
+    typeText: formatPortTypeText(port.valueType, multiple),
+    description: port.description,
+  };
+}
+
+/** 由节点实体定义生成前端节点宏。 */
+export const WORKFLOW_NODE_MACROS: WorkflowNodeMacro[] = listNodeDefinitions().map((definition) => ({
+  type: definition.type,
+  label: definition.name,
+  summary: definition.summary,
+  inputs: definition.ports
+    .filter((port) => port.direction === PortDirection.INPUT)
+    .map((port) => mapPortMacro(port)),
+  outputs: definition.ports
+    .filter((port) => port.direction === PortDirection.OUTPUT)
+    .map((port) => mapPortMacro(port)),
+  palette: definition.palette,
+}));
+
+/** 节点类型到节点宏的快速索引。 */
 export const WORKFLOW_NODE_MACRO_MAP: Record<string, WorkflowNodeMacro> = Object.fromEntries(
   WORKFLOW_NODE_MACROS.map((macro) => [macro.type, macro]),
 ) as Record<string, WorkflowNodeMacro>;
 
+/** 节点端口模板（仅包含端口名数组，供 handle 解析使用）。 */
 export const WORKFLOW_NODE_PORT_TEMPLATES: Record<string, { inputs: string[]; outputs: string[] }> = Object.fromEntries(
   WORKFLOW_NODE_MACROS.map((macro) => [
     macro.type,
