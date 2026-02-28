@@ -171,13 +171,24 @@
           <q-chip v-if="selectedWorkflow" dense :color="selectedWorkflow.source === 'system' ? 'cyan-2' : 'orange-2'" text-color="grey-10">
             {{ selectedWorkflow.source === 'system' ? '内置' : '自定义' }}
           </q-chip>
-          <q-chip dense :color="workflowDraftDirty ? 'orange-2' : 'teal-1'" text-color="grey-10">
-            {{ workflowDraftDirty ? '草稿已修改' : '使用已保存配置' }}
-          </q-chip>
           <q-space />
 
-          <q-btn flat icon="edit" label="编辑" :disable="!selectedWorkflow" @click="openEditor(selectedWorkflowId)" />
-          <q-btn flat icon="content_copy" label="另存为" :disable="!selectedWorkflow" @click="duplicateSelectedWorkflow" />
+          <q-btn
+            v-if="selectedWorkflow?.source === 'system'"
+            flat
+            icon="edit"
+            label="编辑"
+            :disable="!selectedWorkflow"
+            @click="openEditor(selectedWorkflowId)"
+          />
+          <q-btn
+            v-if="selectedWorkflow?.source === 'system'"
+            flat
+            icon="content_copy"
+            label="另存为"
+            :disable="!selectedWorkflow"
+            @click="duplicateSelectedWorkflow"
+          />
           <q-btn
             v-if="selectedWorkflow?.source === 'user'"
             flat
@@ -218,9 +229,7 @@
             <WorkflowBlueprintEditor
               v-model="workflowDraftGraph"
               canvas-mode="canvas-only"
-              feature-level="complete"
-              @run-from-canvas="runSelectedWorkflow"
-              @graph-dirty-change="onWorkflowDraftDirtyChange"
+              feature-level="basic"
             />
           </div>
         </div>
@@ -604,13 +613,6 @@ async function loadWorkflows() {
 async function attemptSelectWorkflow(workflowId: string) {
   if (!workflowId || workflowId === selectedWorkflowId.value) {
     return;
-  }
-
-  if (selectedWorkflow.value?.source === "user" && workflowDraftDirty.value) {
-    const confirmed = window.confirm("当前自定义工作流草稿未保存，切换后会丢失改动，是否继续？");
-    if (!confirmed) {
-      return;
-    }
   }
 
   selectedWorkflowId.value = workflowId;

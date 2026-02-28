@@ -1,6 +1,6 @@
 <template>
   <div class="comfy-editor" :class="{ 'canvas-only-mode': isCanvasOnly }">
-    <div class="top-toolbar row items-center no-wrap q-gutter-sm">
+    <div v-if="showToolbar" class="top-toolbar row items-center no-wrap q-gutter-sm">
       <q-btn flat dense icon="zoom_in" @click="zoomIn">
         <q-tooltip>放大画布</q-tooltip>
       </q-btn>
@@ -11,7 +11,7 @@
         <q-tooltip>适配视图</q-tooltip>
       </q-btn>
       <q-separator vertical inset />
-      <q-btn dense color="primary" icon="auto_fix_high" label="自动排布" :disable="readonly" @click="autoLayout">
+      <q-btn dense color="primary" icon="auto_fix_high" label="自动排布" :disable="readonly || !canStructureEdit" @click="autoLayout">
         <q-tooltip>将节点按网格重新排布</q-tooltip>
       </q-btn>
       <q-btn-dropdown
@@ -59,7 +59,7 @@
         @click="removeSelectedEdge"
       />
       <q-btn
-        v-if="isCanvasOnly"
+        v-if="isCanvasOnly && isCompleteFeature"
         dense
         unelevated
         color="positive"
@@ -119,8 +119,8 @@
           :snap-to-grid="true"
           :snap-grid="[20, 20]"
           :nodes-draggable="!readonly"
-          :nodes-connectable="!readonly && !structureLocked"
-          :edges-updatable="!readonly && !structureLocked"
+          :nodes-connectable="canStructureEdit"
+          :edges-updatable="canStructureEdit"
           :elements-selectable="true"
           :fit-view-on-init="true"
           :pan-on-drag="true"
@@ -135,7 +135,7 @@
           @pane-click="clearSelection"
         >
           <Background :pattern-color="isCanvasOnly ? '#99d7cf' : '#8cc7be'" :gap="20" />
-          <MiniMap pannable zoomable />
+          <MiniMap v-if="!isCanvasOnly || isCompleteFeature" pannable zoomable />
         </VueFlow>
         <div v-if="!isCanvasOnly && (selectedNode || selectedEdge)" class="floating-inspector">
           <div class="row items-center q-mb-sm">
@@ -269,6 +269,8 @@ const readonly = computed(() => props.readonly === true);
 const structureLocked = computed(() => props.structureLocked === true);
 const isCanvasOnly = computed(() => props.canvasMode === "canvas-only");
 const isCompleteFeature = computed(() => (props.featureLevel || "complete") === "complete");
+const canStructureEdit = computed(() => !readonly.value && !structureLocked.value && isCompleteFeature.value);
+const showToolbar = computed(() => !isCanvasOnly.value || isCompleteFeature.value);
 const nodeSearch = ref("");
 const errorMsg = ref("");
 const baselineGraphSnapshot = ref("");
@@ -872,7 +874,7 @@ function onEdgeClick(event: { edge: Edge }) {
 }
 
 function onConnect(connection: Connection) {
-  if (readonly.value || structureLocked.value || !connection.source || !connection.target) {
+  if (!canStructureEdit.value || !connection.source || !connection.target) {
     return;
   }
 
@@ -923,7 +925,7 @@ function onConnect(connection: Connection) {
 }
 
 function addNode(template: NodeTemplate) {
-  if (readonly.value || structureLocked.value) {
+  if (!canStructureEdit.value) {
     return;
   }
 
@@ -949,7 +951,7 @@ function addNode(template: NodeTemplate) {
 }
 
 function removeSelectedNode() {
-  if (readonly.value || structureLocked.value || !selectedNode.value) {
+  if (!canStructureEdit.value || !selectedNode.value) {
     return;
   }
   const targetId = selectedNode.value.id;
@@ -960,7 +962,7 @@ function removeSelectedNode() {
 }
 
 function removeSelectedEdge() {
-  if (readonly.value || structureLocked.value || !selectedEdge.value) {
+  if (!canStructureEdit.value || !selectedEdge.value) {
     return;
   }
   const targetId = selectedEdge.value.id;
@@ -970,7 +972,7 @@ function removeSelectedEdge() {
 }
 
 function autoLayout() {
-  if (readonly.value) {
+  if (!canStructureEdit.value) {
     return;
   }
   flowNodes.value = flowNodes.value.map((node, idx) => ({
@@ -993,7 +995,7 @@ function fitView() {
 }
 
 function updateSelectedNodeRemark(value: string | number | null) {
-  if (readonly.value || structureLocked.value || !selectedNode.value) {
+  if (!canStructureEdit.value || !selectedNode.value) {
     return;
   }
   const remark = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -1029,7 +1031,7 @@ function handleEditorKeydown(event: KeyboardEvent) {
   }
 
   if (event.key === "Delete" || event.key === "Backspace") {
-    if (structureLocked.value) {
+    if (!canStructureEdit.value) {
       return;
     }
     if (selectedEdge.value) {
