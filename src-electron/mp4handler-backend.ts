@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import jpeg from "jpeg-js";
@@ -17,6 +16,7 @@ import {
   setTasksToStore,
   setWorkflowsToStore,
 } from "./backend/infra/store/workflow-store";
+import { getSettingsFromStore, updateSettingsInStore } from "./backend/infra/store/settings-store";
 import {
   type WorkflowDefinition,
   type WorkflowGraph,
@@ -214,6 +214,36 @@ async function fileExists(targetPath: string): Promise<boolean> {
 
 async function cleanupPathQuietly(targetPath: string): Promise<void> {
   await fsp.rm(targetPath, { recursive: true, force: true }).catch(() => void 0);
+}
+
+function sanitizePathSegment(value: string): string {
+  const normalized = value.replace(/[^\w\u4e00-\u9fa5-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized || "default";
+}
+
+function resolveTempRootDir(): string {
+  const settings = getSettingsFromStore();
+  return path.resolve(settings.tempRootDir);
+}
+
+async function ensureTempPurposeDir(purpose: string): Promise<string> {
+  const baseDir = resolveTempRootDir();
+  const purposeDir = path.join(baseDir, sanitizePathSegment(purpose));
+  await ensureDir(purposeDir);
+  return purposeDir;
+}
+
+async function createPurposeTempDir(purpose: string, ...scopes: string[]): Promise<string> {
+  const purposeDir = await ensureTempPurposeDir(purpose);
+  const scopePath = scopes.map((item) => sanitizePathSegment(item)).join(path.sep);
+  const uniqueId = `${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+  const target = scopePath ? path.join(purposeDir, scopePath, uniqueId) : path.join(purposeDir, uniqueId);
+  await ensureDir(target);
+  return target;
+}
+
+async function createTaskTempDir(params: { purpose: string; taskId: string; nodeId: string }): Promise<string> {
+  return createPurposeTempDir(params.purpose, params.taskId, params.nodeId);
 }
 
 function isMp4File(filePath: string): boolean {
@@ -790,13 +820,7 @@ async function extractAllFramesInternal(
   const metadata = await getVideoMetadataInternal(videoPath);
 
   const videoHash = calculateHash(videoPath);
-  const tempDir = path.join(
-    os.tmpdir(),
-    `mp4handler_${videoHash}`,
-    "frames",
-    `${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
-  );
-  await ensureDir(tempDir);
+  const tempDir = await createPurposeTempDir("frame_extract", videoHash);
   try {
     if (emitProgress && sender) {
       emitEvent(sender, "frame_progress", {
@@ -1376,6 +1400,8 @@ function getNodeExecutionDeps(): NodeExecutionDeps {
     downloadSingleFile,
     concatVideosInternal,
     autoSplitVideoInternal,
+    createTaskTempDir,
+    cleanupPathQuietly,
     appendTaskLog,
   };
 }
@@ -1558,6 +1584,8 @@ export async function invokeMp4Command(
     setWorkflowsToStore,
     getTasksFromStore,
     setTasksToStore,
+    getSettingsFromStore,
+    updateSettingsInStore,
     writeTaskRuntime,
     readTaskRuntime,
     deleteTaskRuntime,

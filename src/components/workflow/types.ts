@@ -121,3 +121,7 @@ export interface TaskDetail {
   workflowGraph: WorkflowGraph | null;
   graphProgress: TaskGraphProgress;
 }
+
+export interface AppSettings {
+  tempRootDir: string;
+}

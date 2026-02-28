@@ -1,5 +1,4 @@
 import type { WebContents } from "electron";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { WorkflowGraphNode, WorkflowTaskRecord } from "../../../shared/types";
 import { asBoolean, asNumber, asString, getGraphNodeLabel } from "../node-execution-helpers";
@@ -107,12 +106,11 @@ export async function executeSplitComposePerVideoNode(
   const failedVideos: string[] = [];
 
   const { success, failed } = await deps.runWithConcurrency(filePaths, maxConcurrent, async (videoPath) => {
-    const tempOutputRoot = path.join(
-      task.runDir,
-      ".tmp",
-      "split_compose_per_video",
-      `${node.id}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
-    );
+    const tempOutputRoot = await deps.createTaskTempDir({
+      purpose: "split_compose_per_video",
+      taskId: task.id,
+      nodeId: node.id,
+    });
     try {
       await deps.ensureDir(tempOutputRoot);
       const videoName = path.parse(videoPath).name;
@@ -156,7 +154,7 @@ export async function executeSplitComposePerVideoNode(
       failedVideos.push(videoPath);
       throw new Error("single_video_process_failed");
     } finally {
-      await fsp.rm(tempOutputRoot, { recursive: true, force: true }).catch(() => void 0);
+      await deps.cleanupPathQuietly(tempOutputRoot);
     }
   });
 

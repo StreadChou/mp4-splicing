@@ -43,6 +43,20 @@
             <q-badge v-if="waitingCount > 0" color="negative" rounded>{{ waitingCount }}</q-badge>
           </q-item-section>
         </q-item>
+
+        <q-item
+          clickable
+          v-ripple
+          :active="activeTab === 'settings'"
+          @click="activeTab = 'settings'"
+          active-class="menu-item-active"
+          class="menu-item rounded-borders q-mb-xs"
+        >
+          <q-item-section avatar>
+            <q-icon name="settings" />
+          </q-item-section>
+          <q-item-section>系统设置</q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 
@@ -50,6 +64,7 @@
       <q-page padding>
         <WorkflowManager v-show="activeTab === 'workflows'" />
         <TaskManager ref="taskManagerRef" v-show="activeTab === 'tasks'" @waiting-count="waitingCount = $event" />
+        <SystemSettingsPanel v-show="activeTab === 'settings'" />
       </q-page>
     </q-page-container>
   </q-layout>
@@ -59,9 +74,10 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import WorkflowManager from "src/components/workflow/WorkflowManager.vue";
 import TaskManager from "src/components/workflow/TaskManager.vue";
+import SystemSettingsPanel from "src/components/workflow/SystemSettingsPanel.vue";
 import { listen, type UnlistenFn } from "src/tauri-compat/event";
 
-const activeTab = ref<"workflows" | "tasks">("workflows");
+const activeTab = ref<"workflows" | "tasks" | "settings">("workflows");
 const waitingCount = ref(0);
 const taskManagerRef = ref<InstanceType<typeof TaskManager> | null>(null);
 let unlistenOpenTask: UnlistenFn | null = null;

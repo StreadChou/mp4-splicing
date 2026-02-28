@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeWorkflowGraph, validateWorkflowGraphStructure, validateWorkflowRunConfig } from "../graph/graph-schema";
 import type {
+  AppSettings,
   TaskRuntimeSnapshot,
   WorkflowDefinition,
   WorkflowGraph,
@@ -34,6 +35,65 @@ function asStringArray(value: unknown): string[] {
   return value.map((item) => String(item)).map((item) => item.trim()).filter(Boolean);
 }
 
+function normalizeRemark(value: unknown): string {
+  return asString(value).trim();
+}
+
+function normalizeHandle(value: unknown): string {
+  return asString(value).trim();
+}
+
+function buildNodeSignatureMap(graph: WorkflowGraph): Map<string, { type: string; remark: string }> {
+  return new Map(
+    graph.nodes.map((node) => [
+      node.id,
+      {
+        type: node.type,
+        remark: normalizeRemark(node.remark),
+      },
+    ] as const),
+  );
+}
+
+function buildEdgeSignatures(graph: WorkflowGraph): string[] {
+  return graph.edges
+    .map((edge) => [edge.source, edge.target, normalizeHandle(edge.sourceHandle), normalizeHandle(edge.targetHandle)].join("::"))
+    .sort();
+}
+
+function assertSystemWorkflowUpdateAllowed(beforeGraph: WorkflowGraph, afterGraph: WorkflowGraph): void {
+  const beforeNodes = buildNodeSignatureMap(beforeGraph);
+  const afterNodes = buildNodeSignatureMap(afterGraph);
+
+  if (beforeNodes.size !== afterNodes.size) {
+    throw new Error("内置工作流仅允许修改参数与位置，禁止增删节点");
+  }
+
+  for (const [nodeId, beforeNode] of beforeNodes) {
+    const afterNode = afterNodes.get(nodeId);
+    if (!afterNode) {
+      throw new Error("内置工作流仅允许修改参数与位置，禁止增删节点");
+    }
+    if (beforeNode.type !== afterNode.type) {
+      throw new Error("内置工作流仅允许修改参数与位置，禁止修改节点类型");
+    }
+    if (beforeNode.remark !== afterNode.remark) {
+      throw new Error("内置工作流仅允许修改参数与位置，禁止修改节点备注");
+    }
+  }
+
+  const beforeEdges = buildEdgeSignatures(beforeGraph);
+  const afterEdges = buildEdgeSignatures(afterGraph);
+  if (beforeEdges.length !== afterEdges.length) {
+    throw new Error("内置工作流仅允许修改参数与位置，禁止增删连线");
+  }
+  for (let i = 0; i < beforeEdges.length; i += 1) {
+    if (beforeEdges[i] !== afterEdges[i]) {
+      throw new Error("内置工作流仅允许修改参数与位置，禁止修改连线结构");
+    }
+  }
+}
+
 interface WorkflowTaskCommandContext {
   ensureDefaultWorkflows(): void;
   workflowToMeta(workflow: WorkflowDefinition): WorkflowMeta;
@@ -64,6 +124,8 @@ interface WorkflowTaskCommandContext {
     level?: "info" | "error" | "warn",
     meta?: { nodeId?: string; nodeLabel?: string },
   ): Promise<void>;
+  getSettingsFromStore(): AppSettings;
+  updateSettingsInStore(patch: Partial<AppSettings>): AppSettings;
   emitTaskBroadcast(event: string, payload: unknown): void;
   executeTask(taskId: string, resumePayload?: Record<string, unknown>): Promise<void>;
   removedTaskIds: Set<string>;
@@ -76,6 +138,19 @@ export async function invokeWorkflowTaskCommand(
   ctx: WorkflowTaskCommandContext,
 ): Promise<unknown> {
   switch (command) {
+    case "settings:get": {
+      return ctx.getSettingsFromStore();
+    }
+
+    case "settings:update": {
+      const payload = asRecord(args.settings ?? args);
+      const patch: Partial<AppSettings> = {};
+      if ("tempRootDir" in payload) {
+        patch.tempRootDir = asString(payload.tempRootDir);
+      }
+      return ctx.updateSettingsInStore(patch);
+    }
+
     case "workflow:list": {
       ctx.ensureDefaultWorkflows();
       return ctx
@@ -142,13 +217,23 @@ export async function invokeWorkflowTaskCommand(
       if (!nextName) {
         throw new Error("工作流名称不能为空");
       }
+      const nextDescription = asString(args.description);
+      if (target.source === "system") {
+        if (nextName !== target.name || nextDescription !== target.description) {
+          throw new Error("内置工作流仅允许修改节点参数与位置，禁止修改工作流名称或描述");
+        }
+      }
       ctx.assertWorkflowNameUnique(nextName, workflowId);
+      const nextGraph = normalizeWorkflowGraph(args.graph);
+      if (target.source === "system") {
+        assertSystemWorkflowUpdateAllowed(normalizeWorkflowGraph(target.graph), nextGraph);
+      }
 
       const updated: WorkflowDefinition = {
         ...target,
         name: nextName,
-        description: asString(args.description),
-        graph: normalizeWorkflowGraph(args.graph),
+        description: nextDescription,
+        graph: nextGraph,
         systemKind: target.source === "system" ? target.systemKind : "custom",
         updatedAt: ctx.toIsoNow(),
       };

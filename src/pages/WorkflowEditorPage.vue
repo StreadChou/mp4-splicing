@@ -10,6 +10,7 @@
             <q-icon name="account_tree" />
             <span>工作流编辑器</span>
             <q-badge v-if="isReadonly" color="blue">内置只读</q-badge>
+            <q-badge v-else-if="isSystemWorkflow" color="amber-5" text-color="dark">内置流程(仅参数/位置)</q-badge>
           </div>
         </q-toolbar-title>
         <q-btn flat dense icon="refresh" @click="reloadWorkflow">
@@ -45,7 +46,7 @@
                 v-model="form.name"
                 label="工作流名称"
                 outlined
-                :disable="isReadonly"
+                :disable="isReadonly || isSystemWorkflow"
                 hint="名称不可重复（忽略大小写和首尾空格）"
               />
             </div>
@@ -55,7 +56,7 @@
                 label="描述"
                 outlined
                 autogrow
-                :disable="isReadonly"
+                :disable="isReadonly || isSystemWorkflow"
               />
             </div>
           </div>
@@ -84,10 +85,22 @@
             class="bg-transparent"
           >
             <q-tab-panel name="visual" class="q-pa-none">
-              <WorkflowBlueprintEditor v-model="graphModel" :readonly="isReadonly" />
+              <WorkflowBlueprintEditor
+                v-model="graphModel"
+                :readonly="isReadonly"
+                :structure-locked="isSystemWorkflow"
+              />
             </q-tab-panel>
             <q-tab-panel name="board" class="q-pa-sm">
-              <div class="form-board">
+              <SystemWorkflowBoard
+                v-if="isSystemWorkflow"
+                :system-kind="currentWorkflowSystemKind"
+                :graph="graphModel"
+                :readonly="isReadonly"
+                @update-field="handleBoardFieldUpdate"
+                @pick-path="handleBoardPickPath"
+              />
+              <div v-else class="form-board">
                 <q-banner dense rounded class="bg-grey-9 text-grey-4 q-mb-md">
                   表单看板仅展示配置卡片：必填项在上，可选项在中，有默认值项在下。
                 </q-banner>
@@ -113,9 +126,16 @@
             <q-tab-panel name="code" class="q-pa-sm">
               <div class="row items-center q-gutter-sm q-mb-sm">
                 <q-btn dense flat icon="sync" label="从流程图生成" @click="syncCodeFromCanvas" />
-                <q-btn dense color="primary" icon="published_with_changes" label="应用到流程图" :disable="isReadonly" @click="applyCodeToCanvas" />
+                <q-btn
+                  dense
+                  color="primary"
+                  icon="published_with_changes"
+                  label="应用到流程图"
+                  :disable="isReadonly || isSystemWorkflow"
+                  @click="applyCodeToCanvas"
+                />
                 <q-space />
-                <q-btn dense flat icon="content_paste" label="粘贴" :disable="isReadonly" @click="pasteCodeFromClipboard" />
+                <q-btn dense flat icon="content_paste" label="粘贴" :disable="isReadonly || isSystemWorkflow" @click="pasteCodeFromClipboard" />
                 <q-btn dense color="positive" icon="content_copy" label="复制代码" @click="copyCode" />
               </div>
               <q-input
@@ -124,6 +144,7 @@
                 autogrow
                 outlined
                 dark
+                :disable="isReadonly || isSystemWorkflow"
                 input-style="font-family: Menlo, Monaco, Consolas, monospace; min-height: 520px;"
                 @update:model-value="onCodeTextChange"
               />
@@ -151,7 +172,8 @@ import { openTaskInMain } from "src/tauri-compat/core";
 import { open as openDialog } from "src/tauri-compat/dialog";
 import WorkflowBlueprintEditor from "src/components/workflow/WorkflowBlueprintEditor.vue";
 import BoardNodeCard from "src/components/workflow/board/BoardNodeCard.vue";
-import type { WorkflowGraph, WorkflowSource } from "src/components/workflow/types";
+import SystemWorkflowBoard from "src/components/workflow/board/SystemWorkflowBoard.vue";
+import type { BuiltinWorkflowKind, WorkflowGraph, WorkflowSource } from "src/components/workflow/types";
 import { useWorkflowBoard } from "./workflow-editor/use-workflow-board";
 const route = useRoute();
 const router = useRouter();
@@ -166,6 +188,7 @@ const graphModel = ref<WorkflowGraph>({
 const errorMsg = ref("");
 const currentWorkflowId = ref("");
 const currentWorkflowSource = ref<WorkflowSource>("user");
+const currentWorkflowSystemKind = ref<BuiltinWorkflowKind>("custom");
 const isReadonly = ref(false);
 const editorTab = ref<"visual" | "board" | "code">("visual");
 const workflowCodeText = ref("");
@@ -313,8 +336,8 @@ async function pickNodePath(nodeId: string, configKey: string, directory: boolea
   }
 }
 async function applyCodeToCanvas(): Promise<boolean> {
-  if (isReadonly.value) {
-    errorMsg.value = "内置工作流不可直接编辑，请使用另存为";
+  if (isReadonly.value || isSystemWorkflow.value) {
+    errorMsg.value = "系统工作流不支持代码改图，请使用流程图或小白看板修改参数";
     return false;
   }
   errorMsg.value = "";
@@ -354,7 +377,7 @@ async function copyCode() {
   }
 }
 async function pasteCodeFromClipboard() {
-  if (isReadonly.value) {
+  if (isReadonly.value || isSystemWorkflow.value) {
     return;
   }
   errorMsg.value = "";
@@ -376,6 +399,7 @@ async function reloadWorkflow() {
   if (!id || id === "new") {
     currentWorkflowId.value = "";
     currentWorkflowSource.value = "user";
+    currentWorkflowSystemKind.value = "custom";
     isReadonly.value = false;
     form.name = "";
     form.description = "";
@@ -387,6 +411,7 @@ async function reloadWorkflow() {
     const detail = await getWorkflow(id);
     currentWorkflowId.value = detail.id;
     currentWorkflowSource.value = detail.source;
+    currentWorkflowSystemKind.value = detail.systemKind;
     isReadonly.value = detail.readonly;
     form.name = detail.name;
     form.description = detail.description;

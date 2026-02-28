@@ -140,10 +140,14 @@ export interface TaskRuntimeSnapshot {
   interaction: InteractionRequest | null;
 }
 
+export interface AppSettings {
+  tempRootDir: string;
+}
+
 export interface WorkflowStoreSchema {
   schemaVersion: number;
   workflows: WorkflowDefinition[];
   tasks: WorkflowTaskRecord[];
 }
 
-export const WORKFLOW_SCHEMA_VERSION = 6;
+export const WORKFLOW_SCHEMA_VERSION = 7;

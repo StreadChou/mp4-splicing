@@ -44,6 +44,8 @@ export interface NodeExecutionDeps {
       skipLast: boolean;
     },
   ): Promise<string>;
+  createTaskTempDir(params: { purpose: string; taskId: string; nodeId: string }): Promise<string>;
+  cleanupPathQuietly(targetPath: string): Promise<void>;
   appendTaskLog(
     taskId: string,
     message: string,

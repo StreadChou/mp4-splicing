@@ -1,11 +1,7 @@
 <template>
   <div class="comfy-node" :class="`type-${nodeType}`">
     <div class="node-title">
-      <span v-if="hasRemark" class="node-name">
-        {{ nodeRemark }}
-        <span class="node-name-origin">({{ nodeTypeLabel }})</span>
-      </span>
-      <span v-else class="node-name">{{ nodeTypeLabel }}</span>
+      <span class="node-name">{{ nodeTypeLabel }}</span>
     </div>
 
     <div class="node-body">
@@ -140,11 +136,6 @@ const props = defineProps<{
 const nodeType = computed(() => props.data?.nodeType || "custom");
 const definition = computed(() => getNodeDefinition(nodeType.value));
 const nodeTypeLabel = computed(() => props.data?.nodeTypeLabel || definition.value?.name || "自定义");
-const nodeRemark = computed(() => {
-  const raw = props.data?.remark;
-  return typeof raw === "string" ? raw.trim() : "";
-});
-const hasRemark = computed(() => nodeRemark.value.length > 0);
 const isReadonly = computed(() => props.data?.readonly === true);
 const inputs = computed(() => (Array.isArray(props.data?.inputs) ? props.data.inputs : ["in"]));
 const outputs = computed(() => (Array.isArray(props.data?.outputs) ? props.data.outputs : ["out"]));
@@ -338,13 +329,6 @@ const configPreview = computed(() => {
   font-weight: 700;
   font-size: 14px;
   color: #f3f4f6;
-}
-
-.node-name-origin {
-  margin-left: 4px;
-  font-size: 10px;
-  font-weight: 500;
-  color: #94a3b8;
 }
 
 .node-body {

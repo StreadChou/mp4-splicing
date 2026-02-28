@@ -7,12 +7,16 @@
       <q-separator vertical inset />
       <q-btn dense color="primary" icon="auto_fix_high" label="自动排布" :disable="readonly" @click="autoLayout" />
       <q-space />
+      <q-badge v-if="structureLocked" color="warning" text-color="dark">系统流程结构锁定</q-badge>
       <q-badge color="grey-8">ComfyUI 风格蓝图编辑器</q-badge>
     </div>
 
     <div class="editor-main row no-wrap">
       <aside class="left-panel">
         <div class="panel-title">节点库</div>
+        <q-banner v-if="structureLocked" dense rounded class="bg-grey-9 text-grey-4 q-mb-sm">
+          系统流程不允许增删节点与连线。
+        </q-banner>
         <q-input
           v-model="nodeSearch"
           dense
@@ -35,7 +39,7 @@
               unelevated
               class="node-add-btn"
               :label="tpl.label"
-              :disable="readonly"
+              :disable="readonly || structureLocked"
               @click="addNode(tpl)"
             />
           </div>
@@ -54,8 +58,8 @@
           :snap-to-grid="true"
           :snap-grid="[20, 20]"
           :nodes-draggable="!readonly"
-          :nodes-connectable="!readonly"
-          :edges-updatable="!readonly"
+          :nodes-connectable="!readonly && !structureLocked"
+          :edges-updatable="!readonly && !structureLocked"
           :elements-selectable="true"
           :fit-view-on-init="true"
           :pan-on-drag="true"
@@ -86,7 +90,7 @@
             outlined
             dark
             label="备注(可选)"
-            :disable="readonly"
+            :disable="readonly || structureLocked"
             :model-value="selectedNode.data?.remark || ''"
             @update:model-value="updateSelectedNodeRemark"
           />
@@ -124,13 +128,13 @@
           </q-banner>
 
           <div class="row q-gutter-sm q-mt-sm">
-            <q-btn color="negative" flat dense label="删除节点" :disable="readonly" @click="removeSelectedNode" />
+            <q-btn color="negative" flat dense label="删除节点" :disable="readonly || structureLocked" @click="removeSelectedNode" />
           </div>
         </template>
 
         <template v-else-if="selectedEdge">
           <div class="text-caption text-grey-5">连线：{{ selectedEdgeDisplayTitle }}</div>
-          <q-btn class="q-mt-sm" color="negative" flat dense label="删除连线" :disable="readonly" @click="removeSelectedEdge" />
+          <q-btn class="q-mt-sm" color="negative" flat dense label="删除连线" :disable="readonly || structureLocked" @click="removeSelectedEdge" />
         </template>
 
         <template v-else>
@@ -193,6 +197,7 @@ interface NodeData {
 const props = defineProps<{
   modelValue: WorkflowGraph;
   readonly?: boolean;
+  structureLocked?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -200,6 +205,7 @@ const emit = defineEmits<{
 }>();
 
 const readonly = computed(() => props.readonly === true);
+const structureLocked = computed(() => props.structureLocked === true);
 const nodeSearch = ref("");
 const errorMsg = ref("");
 
@@ -495,6 +501,37 @@ function getNextNodeId(nodeType: string): string {
 function canonicalizeGraphNodeIds(graph: WorkflowGraph): WorkflowGraph {
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph.edges) ? graph.edges : [];
+
+  if (structureLocked.value) {
+    const normalizedNodes = nodes.map((node, idx) => {
+      const type = typeof node.type === "string" && node.type.trim() ? node.type : "custom";
+      const id = typeof node.id === "string" && node.id.trim() ? node.id.trim() : `node_${String(idx + 1)}`;
+      return {
+        ...node,
+        id,
+        type,
+      };
+    });
+
+    const nodeIdSet = new Set(normalizedNodes.map((node) => node.id));
+    const normalizedEdges = edges
+      .map((edge, idx) => {
+        if (!nodeIdSet.has(edge.source) || !nodeIdSet.has(edge.target)) {
+          return null;
+        }
+        return {
+          ...edge,
+          id: edge.id || `edge_${String(idx + 1)}`,
+        };
+      })
+      .filter((edge): edge is WorkflowGraph["edges"][number] => edge !== null);
+
+    return {
+      nodes: normalizedNodes,
+      edges: normalizedEdges,
+    };
+  }
+
   const counters = new Map<string, number>();
   const idMap = new Map<string, string>();
 
@@ -753,7 +790,7 @@ function onEdgeClick(event: { edge: Edge }) {
 }
 
 function onConnect(connection: Connection) {
-  if (readonly.value || !connection.source || !connection.target) {
+  if (readonly.value || structureLocked.value || !connection.source || !connection.target) {
     return;
   }
 
@@ -804,7 +841,7 @@ function onConnect(connection: Connection) {
 }
 
 function addNode(template: NodeTemplate) {
-  if (readonly.value) {
+  if (readonly.value || structureLocked.value) {
     return;
   }
 
@@ -830,7 +867,7 @@ function addNode(template: NodeTemplate) {
 }
 
 function removeSelectedNode() {
-  if (readonly.value || !selectedNode.value) {
+  if (readonly.value || structureLocked.value || !selectedNode.value) {
     return;
   }
   const targetId = selectedNode.value.id;
@@ -841,7 +878,7 @@ function removeSelectedNode() {
 }
 
 function removeSelectedEdge() {
-  if (readonly.value || !selectedEdge.value) {
+  if (readonly.value || structureLocked.value || !selectedEdge.value) {
     return;
   }
   const targetId = selectedEdge.value.id;
@@ -874,7 +911,7 @@ function fitView() {
 }
 
 function updateSelectedNodeRemark(value: string | number | null) {
-  if (readonly.value || !selectedNode.value) {
+  if (readonly.value || structureLocked.value || !selectedNode.value) {
     return;
   }
   const remark = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -899,6 +936,9 @@ function handleEditorKeydown(event: KeyboardEvent) {
   }
 
   if (event.key === "Delete" || event.key === "Backspace") {
+    if (structureLocked.value) {
+      return;
+    }
     if (selectedEdge.value) {
       removeSelectedEdge();
       event.preventDefault();

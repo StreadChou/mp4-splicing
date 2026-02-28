@@ -19,6 +19,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "user_urls",
             type: "user_input",
+            remark: "下载文本输入",
             config: {
               text: "",
             },
@@ -27,12 +28,14 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "output_dir",
             type: "output_dir",
+            remark: "下载输出目录",
             config: {},
             position: { x: 100, y: 360 },
           },
           {
             id: "text_to_array",
             type: "text_split",
+            remark: "文本拆成列表",
             config: {
               mode: "newline",
               trim: true,
@@ -43,6 +46,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "iterate",
+            remark: "逐条遍历下载项",
             config: {
               concurrency: 3,
             },
@@ -51,6 +55,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "download",
             type: "download",
+            remark: "下载单个视频",
             config: {},
             position: { x: 1400, y: 220 },
           },
@@ -78,18 +83,21 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "input_dir",
             type: "input_dir",
+            remark: "视频来源目录",
             config: {},
             position: { x: 100, y: 100 },
           },
           {
             id: "output_dir",
             type: "output_dir",
+            remark: "拼接输出目录",
             config: {},
             position: { x: 100, y: 600 },
           },
           {
             id: "read_dir",
             type: "read_mp4_files",
+            remark: "扫描MP4文件",
             config: {
               recursive: true,
               maxDepth: 2,
@@ -99,6 +107,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "fixed_start",
             type: "select_video",
+            remark: "可选固定开头",
             config: {
               videoPath: "",
             },
@@ -107,6 +116,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "fixed_end",
             type: "select_video",
+            remark: "可选固定结尾",
             config: {
               videoPath: "",
             },
@@ -115,6 +125,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "repeat",
+            remark: "循环生成次数",
             config: {
               concurrency: 1,
               times: 1,
@@ -124,6 +135,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "compose_videos",
             type: "compose_videos",
+            remark: "组合输出视频",
             config: {
               shuffle: false,
             },
@@ -155,18 +167,21 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "input_dir",
             type: "input_dir",
+            remark: "待处理视频目录",
             config: {},
             position: { x: 100, y: 100 },
           },
           {
             id: "compose_output_dir",
             type: "output_dir",
+            remark: "去尾输出目录",
             config: {},
             position: { x: 100, y: 360 },
           },
           {
             id: "read_dir",
             type: "read_mp4_files",
+            remark: "读取待处理视频",
             config: {
               recursive: false,
               maxDepth: 0,
@@ -176,6 +191,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "split_algo",
             type: "split_algo_ssim",
+            remark: "拆解算法配置",
             config: {
               threshold: 0.7,
               minDuration: 2,
@@ -185,6 +201,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "iterate",
+            remark: "逐个视频处理",
             config: {
               concurrency: 2,
             },
@@ -193,6 +210,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "new_ending",
             type: "select_video",
+            remark: "可选替换结尾",
             config: {
               videoPath: "",
             },
@@ -201,6 +219,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "split_compose_per_video",
             type: "split_compose_per_video",
+            remark: "单视频拆解重组",
             config: {
               dropHead: false,
               dropTail: true,
@@ -234,18 +253,21 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "input_dir",
             type: "input_dir",
+            remark: "待拆解目录",
             config: {},
             position: { x: 100, y: 120 },
           },
           {
             id: "output_dir",
             type: "output_dir",
+            remark: "拆解输出目录",
             config: {},
             position: { x: 100, y: 360 },
           },
           {
             id: "read_dir",
             type: "read_mp4_files",
+            remark: "扫描要拆解的视频",
             config: {
               recursive: true,
               maxDepth: 2,
@@ -255,6 +277,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "split_algo",
             type: "split_algo_ssim",
+            remark: "拆解算法配置",
             config: {
               threshold: 0.7,
               minDuration: 2,
@@ -264,6 +287,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "iterate",
+            remark: "逐个视频拆解",
             config: {
               concurrency: 2,
             },
@@ -272,6 +296,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "auto_split",
             type: "auto_split",
+            remark: "执行自动拆解",
             config: {
               dropHead: false,
               dropTail: false,
@@ -303,24 +328,28 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "input_dir",
             type: "input_dir",
+            remark: "原始视频目录",
             config: {},
             position: { x: 100, y: 100 },
           },
           {
             id: "split_output_dir",
             type: "output_dir",
+            remark: "拆解片段目录",
             config: {},
             position: { x: 100, y: 340 },
           },
           {
             id: "concat_output_dir",
             type: "output_dir",
+            remark: "组合输出目录",
             config: {},
             position: { x: 100, y: 580 },
           },
           {
             id: "read_dir",
             type: "read_mp4_files",
+            remark: "扫描源视频",
             config: {
               recursive: true,
               maxDepth: 2,
@@ -330,6 +359,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "split_algo",
             type: "split_algo_ssim",
+            remark: "拆解算法配置",
             config: {
               threshold: 0.7,
               minDuration: 2,
@@ -339,6 +369,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "auto_split",
             type: "auto_split",
+            remark: "先做全量拆解",
             config: {
               dropHead: false,
               dropTail: false,
@@ -348,6 +379,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "fixed_start",
             type: "select_video",
+            remark: "可选固定开头",
             config: {
               videoPath: "",
             },
@@ -356,6 +388,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "fixed_end",
             type: "select_video",
+            remark: "可选固定结尾",
             config: {
               videoPath: "",
             },
@@ -364,6 +397,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "repeat",
+            remark: "循环组合次数",
             config: {
               concurrency: 1,
               times: 1,
@@ -373,6 +407,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "compose_videos",
             type: "compose_videos",
+            remark: "组合拆解片段",
             config: {
               shuffle: true,
             },
@@ -407,6 +442,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "user_urls",
             type: "user_input",
+            remark: "下载文本输入",
             config: {
               text: "",
             },
@@ -415,18 +451,21 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "download_output_dir",
             type: "output_dir",
+            remark: "下载输出目录",
             config: {},
             position: { x: 100, y: 340 },
           },
           {
             id: "split_output_dir",
             type: "output_dir",
+            remark: "拆解输出目录",
             config: {},
             position: { x: 100, y: 580 },
           },
           {
             id: "text_to_array",
             type: "text_split",
+            remark: "文本拆成列表",
             config: {
               mode: "newline",
               trim: true,
@@ -437,6 +476,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "loop",
             type: "iterate",
+            remark: "逐条遍历下载项",
             config: {
               concurrency: 3,
             },
@@ -445,12 +485,14 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "download",
             type: "download",
+            remark: "下载单个视频",
             config: {},
             position: { x: 1400, y: 220 },
           },
           {
             id: "split_algo",
             type: "split_algo_ssim",
+            remark: "拆解算法配置",
             config: {
               threshold: 0.7,
               minDuration: 2,
@@ -460,6 +502,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
           {
             id: "auto_split",
             type: "auto_split",
+            remark: "下载后自动拆解",
             config: {
               dropHead: false,
               dropTail: false,
