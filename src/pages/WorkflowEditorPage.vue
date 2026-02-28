@@ -47,6 +47,7 @@
             :structure-locked="isSystemWorkflow"
             canvas-mode="full"
             feature-level="complete"
+            :allowed-node-types="allowedNodeTypes"
           />
         </div>
 
@@ -155,6 +156,7 @@ import {
   updateWorkflow,
   validateWorkflowGraph,
 } from "src/api/workflow-api";
+import { getLicenseState } from "src/api/license-api";
 import { openTaskInMain } from "src/tauri-compat/core";
 import { open as openDialog } from "src/tauri-compat/dialog";
 import AppDesktopShell from "src/components/shell/AppDesktopShell.vue";
@@ -162,7 +164,7 @@ import WindowControls from "src/components/shell/WindowControls.vue";
 import WorkflowBlueprintEditor from "src/components/workflow/WorkflowBlueprintEditor.vue";
 import BoardNodeCard from "src/components/workflow/board/BoardNodeCard.vue";
 import SystemWorkflowBoard from "src/components/workflow/board/SystemWorkflowBoard.vue";
-import type { BuiltinWorkflowKind, WorkflowGraph, WorkflowSource } from "src/components/workflow/types";
+import type { BuiltinWorkflowKind, LicenseState, WorkflowGraph, WorkflowSource } from "src/components/workflow/types";
 import { useWorkflowBoard } from "./workflow-editor/use-workflow-board";
 const $q = useQuasar();
 const isMac = $q.platform.is.mac;
@@ -184,6 +186,16 @@ const isReadonly = ref(false);
 const editorTab = ref<"visual" | "board" | "code" | "settings">("visual");
 const workflowCodeText = ref("");
 const codeDirty = ref(false);
+const licenseState = ref<LicenseState>({
+  activated: false,
+  cacheValid: false,
+  needsValidation: false,
+  lastVerifiedAt: "",
+  cachedUntil: "",
+  unlockPayload: null,
+  effectiveAllowedNodeTypes: [],
+});
+const allowedNodeTypes = computed(() => licenseState.value.effectiveAllowedNodeTypes);
 const isSystemWorkflow = computed(() => currentWorkflowSource.value === "system");
 const { boardSections, readNodeConfig, patchNodeConfig, handleBoardFieldUpdate } = useWorkflowBoard(graphModel, isReadonly);
 const routeWorkflowId = computed(() => {
@@ -412,6 +424,21 @@ async function reloadWorkflow() {
     errorMsg.value = String(error);
   }
 }
+async function loadCurrentLicenseState() {
+  try {
+    licenseState.value = await getLicenseState();
+  } catch {
+    licenseState.value = {
+      activated: false,
+      cacheValid: false,
+      needsValidation: false,
+      lastVerifiedAt: "",
+      cachedUntil: "",
+      unlockPayload: null,
+      effectiveAllowedNodeTypes: [],
+    };
+  }
+}
 async function saveWorkflow() {
   if (isReadonly.value) {
     errorMsg.value = "内置工作流不可直接编辑，请使用另存为";
@@ -496,6 +523,7 @@ async function handleRunWorkflow() {
   }
 }
 onMounted(async () => {
+  await loadCurrentLicenseState();
   await reloadWorkflow();
 });
 watch(

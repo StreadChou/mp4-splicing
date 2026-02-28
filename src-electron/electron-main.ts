@@ -25,6 +25,23 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | undefined;
 const workflowEditorWindows = new Set<BrowserWindow>();
 
+function normalizeHashPath(value?: string): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    return "/";
+  }
+  return raw.startsWith("/") ? raw : `/${raw}`;
+}
+
+async function loadRendererRoute(targetWindow: BrowserWindow, hashPath?: string): Promise<void> {
+  const normalized = normalizeHashPath(hashPath);
+  if (process.env.DEV) {
+    await targetWindow.loadURL(`${process.env.APP_URL}#${normalized}`);
+  } else {
+    await targetWindow.loadFile("index.html", { hash: normalized });
+  }
+}
+
 function emitWindowState(targetWindow: BrowserWindow) {
   if (targetWindow.isDestroyed()) {
     return;
@@ -111,7 +128,7 @@ async function registerLocalFileProtocol() {
   });
 }
 
-async function createWindow() {
+async function createWindow(hashPath?: string) {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
   mainWindow = new BrowserWindow({
     icon: path.resolve(currentDir, "icons/icon.png"),
@@ -133,11 +150,7 @@ async function createWindow() {
     },
   });
 
-  if (process.env.DEV) {
-    await mainWindow.loadURL(process.env.APP_URL);
-  } else {
-    await mainWindow.loadFile("index.html");
-  }
+  await loadRendererRoute(mainWindow, hashPath);
 
   mainWindow.maximize();
   bindWindowStateEvents(mainWindow);
@@ -183,11 +196,7 @@ async function createWorkflowEditorWindow(workflowId?: string) {
   bindWindowStateEvents(editorWindow);
   emitWindowState(editorWindow);
 
-  if (process.env.DEV) {
-    await editorWindow.loadURL(`${process.env.APP_URL}#${hashPath}`);
-  } else {
-    await editorWindow.loadFile("index.html", { hash: hashPath });
-  }
+  await loadRendererRoute(editorWindow, hashPath);
 
   if (process.env.DEBUGGING) {
     editorWindow.webContents.openDevTools({ mode: "right" });
@@ -203,6 +212,15 @@ async function createWorkflowEditorWindow(workflowId?: string) {
       });
     }
   });
+}
+
+function closeAllEditorWindows(): void {
+  for (const editorWindow of Array.from(workflowEditorWindows)) {
+    workflowEditorWindows.delete(editorWindow);
+    if (!editorWindow.isDestroyed()) {
+      editorWindow.destroy();
+    }
+  }
 }
 
 ipcMain.handle("mp4handler:invoke", async (event, command: string, args?: Record<string, unknown>) => {
@@ -221,7 +239,7 @@ ipcMain.handle("mp4handler:open-workflow-editor", async (_event, workflowId?: st
 
 ipcMain.handle("mp4handler:open-task", async (_event, taskId?: string) => {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    await createWindow();
+    await createWindow("/");
   }
 
   if (!mainWindow) {
@@ -242,6 +260,48 @@ ipcMain.handle("mp4handler:open-task", async (_event, taskId?: string) => {
     });
   }
 
+  return true;
+});
+
+ipcMain.handle("mp4handler:license-kick-to-activate", async (event, reason?: string) => {
+  const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? null;
+  const dialogWindow = ownerWindow && !ownerWindow.isDestroyed()
+    ? ownerWindow
+    : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const detail = typeof reason === "string" && reason.trim()
+    ? reason.trim()
+    : "授权验证未通过，请重新输入激活码。";
+
+  const dialogOptions = {
+    type: "warning" as const,
+    title: "授权失效",
+    message: "授权验证失败",
+    detail,
+    buttons: ["确定"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+
+  if (dialogWindow) {
+    await dialog.showMessageBox(dialogWindow, dialogOptions);
+  } else {
+    await dialog.showMessageBox(dialogOptions);
+  }
+
+  closeAllEditorWindows();
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    await createWindow("/activate");
+    return true;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  await loadRendererRoute(mainWindow, "/activate");
+  mainWindow.show();
+  mainWindow.focus();
   return true;
 });
 
@@ -342,7 +402,7 @@ ipcMain.handle("mp4handler:window-is-maximized", (event) => {
 
 void app.whenReady().then(async () => {
   await registerLocalFileProtocol();
-  await createWindow();
+  await createWindow("/");
 });
 
 app.on("window-all-closed", () => {
@@ -353,6 +413,6 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (mainWindow === undefined) {
-    void createWindow();
+    void createWindow("/");
   }
 });

@@ -18,6 +18,15 @@ import {
 } from "./backend/infra/store/workflow-store";
 import { getSettingsFromStore, updateSettingsInStore } from "./backend/infra/store/settings-store";
 import {
+  clearLicenseRecordInStore,
+  getActiveLicenseCodeFromStore,
+  getLicenseKeysFromStore,
+  getLicenseRecordFromStore,
+  setActiveLicenseCodeToStore,
+  setLicenseKeysToStore,
+  setLicenseRecordToStore,
+} from "./backend/infra/store/license-store";
+import {
   type WorkflowDefinition,
   type WorkflowGraph,
   type WorkflowTaskRecord,
@@ -1586,6 +1595,13 @@ export async function invokeMp4Command(
     setTasksToStore,
     getSettingsFromStore,
     updateSettingsInStore,
+    getLicenseRecordFromStore,
+    setLicenseRecordToStore,
+    clearLicenseRecordInStore,
+    getLicenseKeysFromStore,
+    setLicenseKeysToStore,
+    getActiveLicenseCodeFromStore,
+    setActiveLicenseCodeToStore,
     writeTaskRuntime,
     readTaskRuntime,
     deleteTaskRuntime,

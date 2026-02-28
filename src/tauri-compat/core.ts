@@ -24,6 +24,10 @@ export async function openTaskInMain(taskId: string): Promise<boolean> {
   return window.mp4handler.openTaskInMain(taskId);
 }
 
+export async function licenseKickToActivate(reason?: string): Promise<boolean> {
+  return window.mp4handler.licenseKickToActivate(reason);
+}
+
 export async function windowMinimize(): Promise<boolean> {
   return window.mp4handler.windowMinimize();
 }

@@ -159,6 +159,15 @@
                 <q-item-label caption>临时目录与运行目录相关配置</q-item-label>
               </q-item-section>
             </q-item>
+            <q-item clickable :active="settingCatalog === 'subscription'" active-class="setting-item-active" class="setting-item" @click="settingCatalog = 'subscription'">
+              <q-item-section avatar>
+                <q-icon name="vpn_key" color="teal-8" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>订阅设置</q-item-label>
+                <q-item-label caption>管理多个激活码并切换当前生效 key</q-item-label>
+              </q-item-section>
+            </q-item>
           </q-list>
         </div>
       </div>
@@ -436,6 +445,7 @@
 
       <div v-else class="right-pane q-pa-md">
         <SystemSettingsPanel v-if="settingCatalog === 'directory'" />
+        <SubscriptionSettingsPanel v-else @license-switched="handleLicenseSwitched" />
       </div>
     </template>
   </AppDesktopShell>
@@ -460,6 +470,7 @@ import AppDesktopShell from "src/components/shell/AppDesktopShell.vue";
 import WindowControls from "src/components/shell/WindowControls.vue";
 import WorkflowBlueprintEditor from "src/components/workflow/WorkflowBlueprintEditor.vue";
 import SystemSettingsPanel from "src/components/workflow/SystemSettingsPanel.vue";
+import SubscriptionSettingsPanel from "src/components/workflow/SubscriptionSettingsPanel.vue";
 import SystemWorkflowBoard from "src/components/workflow/board/SystemWorkflowBoard.vue";
 import type { TaskDetail, WorkflowDefinition, WorkflowGraph, WorkflowMeta, WorkflowTaskRecord, WorkflowTaskStatus } from "src/components/workflow/types";
 import { getNodeDefinition } from "src/shared/nodes";
@@ -1251,7 +1262,12 @@ async function handleTaskRemoved(payload: unknown) {
   }
 }
 
-const settingCatalog = ref<"directory">("directory");
+function handleLicenseSwitched() {
+  void loadWorkflows();
+  void loadTasks();
+}
+
+const settingCatalog = ref<"directory" | "subscription">("directory");
 
 onMounted(async () => {
   await loadWorkflows();

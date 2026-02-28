@@ -18,6 +18,7 @@ declare global {
       }): Promise<string | string[] | null>;
       openWorkflowEditor(workflowId?: string): Promise<boolean>;
       openTaskInMain(taskId: string): Promise<boolean>;
+      licenseKickToActivate(reason?: string): Promise<boolean>;
       windowMinimize(): Promise<boolean>;
       windowToggleMaximize(): Promise<boolean>;
       windowClose(): Promise<boolean>;

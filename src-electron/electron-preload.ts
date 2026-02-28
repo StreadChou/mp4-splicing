@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld("mp4handler", {
     return ipcRenderer.invoke("mp4handler:open-task", taskId);
   },
 
+  licenseKickToActivate: (reason?: string) => {
+    return ipcRenderer.invoke("mp4handler:license-kick-to-activate", reason ?? "");
+  },
+
   windowMinimize: () => {
     return ipcRenderer.invoke("mp4handler:window-minimize") as Promise<boolean>;
   },

@@ -23,7 +23,7 @@
         :disable="readonly || structureLocked"
       >
         <q-list dense style="min-width: 220px">
-          <q-item v-for="tpl in nodeTemplates" :key="`quick-add-${tpl.type}`" clickable v-close-popup @click="addNode(tpl)">
+          <q-item v-for="tpl in availableTemplates" :key="`quick-add-${tpl.type}`" clickable v-close-popup @click="addNode(tpl)">
             <q-item-section>{{ tpl.label }}</q-item-section>
             <q-item-section side class="text-caption text-grey-6">{{ tpl.type }}</q-item-section>
           </q-item>
@@ -257,6 +257,7 @@ const props = defineProps<{
   structureLocked?: boolean;
   canvasMode?: "full" | "canvas-only";
   featureLevel?: "basic" | "complete";
+  allowedNodeTypes?: string[] | null;
 }>();
 
 const emit = defineEmits<{
@@ -293,12 +294,29 @@ const nodeTypes = {
   comfy: markRaw(ComfyNode),
 };
 
-const filteredTemplates = computed(() => {
-  const keyword = nodeSearch.value.trim().toLowerCase();
-  if (!keyword) {
+const allowedNodeTypeSet = computed<Set<string> | null>(() => {
+  const raw = props.allowedNodeTypes;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  return new Set(raw.map((item) => item.trim()).filter(Boolean));
+});
+
+const availableTemplates = computed(() => {
+  const allowedSet = allowedNodeTypeSet.value;
+  if (!allowedSet) {
     return nodeTemplates;
   }
-  return nodeTemplates.filter(
+  return nodeTemplates.filter((item) => allowedSet.has(item.type));
+});
+
+const filteredTemplates = computed(() => {
+  const keyword = nodeSearch.value.trim().toLowerCase();
+  const candidates = availableTemplates.value;
+  if (!keyword) {
+    return candidates;
+  }
+  return candidates.filter(
     (item) => item.label.toLowerCase().includes(keyword) || item.type.toLowerCase().includes(keyword),
   );
 });
@@ -926,6 +944,10 @@ function onConnect(connection: Connection) {
 
 function addNode(template: NodeTemplate) {
   if (!canStructureEdit.value) {
+    return;
+  }
+  if (allowedNodeTypeSet.value && !allowedNodeTypeSet.value.has(template.type)) {
+    errorMsg.value = `当前激活码不支持节点: ${template.label}`;
     return;
   }
 

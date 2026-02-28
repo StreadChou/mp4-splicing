@@ -125,3 +125,43 @@ export interface TaskDetail {
 export interface AppSettings {
   tempRootDir: string;
 }
+
+export type LicenseUnlockPayload =
+  | { unlock: "all" }
+  | { unlock: "workflow"; workflows: string[]; nodes: string[] };
+
+export interface LicenseState {
+  activated: boolean;
+  cacheValid: boolean;
+  needsValidation: boolean;
+  lastVerifiedAt: string;
+  cachedUntil: string;
+  unlockPayload: LicenseUnlockPayload | null;
+  effectiveAllowedNodeTypes: string[] | null;
+}
+
+export interface LicenseActivationResult {
+  success: boolean;
+  message: string;
+  state: LicenseState;
+}
+
+export interface LicenseBackgroundValidateResult {
+  valid: boolean;
+  message: string;
+  state: LicenseState;
+}
+
+export interface LicenseKeyProfile {
+  activationCode: string;
+  unlockPayload: LicenseUnlockPayload | null;
+  lastVerifiedAt: string;
+  cachedUntil: string;
+  status: "valid" | "invalid";
+}
+
+export interface LicenseKeysResult {
+  activeCode: string;
+  keys: LicenseKeyProfile[];
+  state: LicenseState;
+}
