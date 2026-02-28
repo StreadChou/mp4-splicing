@@ -150,4 +150,4 @@ export interface WorkflowStoreSchema {
   tasks: WorkflowTaskRecord[];
 }
 
-export const WORKFLOW_SCHEMA_VERSION = 7;
+export const WORKFLOW_SCHEMA_VERSION = 8;

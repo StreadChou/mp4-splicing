@@ -28,6 +28,13 @@ export const REPEAT_NODE: NodeDefinition = {
       required: true,
       description: "当前循环索引。",
     },
+    {
+      name: "done",
+      direction: PortDirection.OUTPUT,
+      valueType: PortDataType.COMPLETION_SIGNAL,
+      required: true,
+      description: "循环结束信号。",
+    },
   ],
   fields: [
     {

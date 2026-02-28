@@ -36,6 +36,11 @@ function readLoopRunTimes(payload: Record<string, unknown>, task: WorkflowTaskRe
     payload.__loop && typeof payload.__loop === "object" && !Array.isArray(payload.__loop)
       ? (payload.__loop as Record<string, unknown>)
       : {};
+  const loopStrategy = String(loopMeta.strategy || "");
+  if (loopStrategy === "repeat" && typeof payload.index === "number") {
+    // 在图执行器已按 repeat 展开时，每次循环体只执行一次组合。
+    return 1;
+  }
   const raw = Math.round(asNumber(loopMeta.times ?? payload.runTimes ?? task.runtimeInput.runTimes ?? 1));
   return Math.max(1, raw || 1);
 }

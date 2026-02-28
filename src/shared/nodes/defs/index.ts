@@ -1,4 +1,5 @@
 import { AUTO_SPLIT_NODE } from "./auto-split";
+import { COLLECT_NODE } from "./collect";
 import { COMPOSE_VIDEOS_NODE } from "./compose-videos";
 import { CONTROL_NODE } from "./control";
 import { DOWNLOAD_NODE } from "./download";
@@ -26,6 +27,7 @@ export const NODE_DEFINITIONS = [
   DOWNLOAD_NODE,
   ITERATE_NODE,
   REPEAT_NODE,
+  COLLECT_NODE,
   SPLIT_ALGO_SSIM_NODE,
   SPLIT_ALGO_HISTOGRAM_NODE,
   SPLIT_ALGO_FRAME_DIFF_NODE,

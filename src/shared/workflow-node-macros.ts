@@ -73,6 +73,7 @@ const PORT_LABEL_MAP: Record<string, string> = {
   splitAlgorithm: "拆解算法",
   videoPath: "视频路径",
   done: "完成信号",
+  doneSignal: "结束信号",
   result: "结果",
   in: "输入",
   out: "输出",

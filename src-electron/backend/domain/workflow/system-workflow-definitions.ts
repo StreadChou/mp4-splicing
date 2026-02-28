@@ -367,14 +367,30 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             position: { x: 520, y: 340 },
           },
           {
+            id: "iterate_split",
+            type: "iterate",
+            remark: "逐个视频拆解",
+            config: {
+              concurrency: 2,
+            },
+            position: { x: 960, y: 100 },
+          },
+          {
             id: "auto_split",
             type: "auto_split",
-            remark: "先做全量拆解",
+            remark: "按单视频自动拆解",
             config: {
               dropHead: false,
               dropTail: false,
             },
-            position: { x: 960, y: 160 },
+            position: { x: 1400, y: 120 },
+          },
+          {
+            id: "collect_split_files",
+            type: "collect",
+            remark: "汇总拆解片段",
+            config: {},
+            position: { x: 1840, y: 120 },
           },
           {
             id: "fixed_start",
@@ -383,7 +399,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 960, y: 420 },
+            position: { x: 1840, y: 420 },
           },
           {
             id: "fixed_end",
@@ -392,7 +408,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               videoPath: "",
             },
-            position: { x: 960, y: 660 },
+            position: { x: 1840, y: 660 },
           },
           {
             id: "loop",
@@ -402,7 +418,7 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
               concurrency: 1,
               times: 1,
             },
-            position: { x: 1400, y: 160 },
+            position: { x: 2280, y: 120 },
           },
           {
             id: "compose_videos",
@@ -411,19 +427,22 @@ export function createSystemWorkflowDefinitions(): WorkflowDefinition[] {
             config: {
               shuffle: true,
             },
-            position: { x: 1840, y: 360 },
+            position: { x: 2720, y: 360 },
           },
         ],
         edges: [
           { id: "e1", source: "input_dir", target: "read_dir", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e2", source: "read_dir", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e3", source: "split_output_dir", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e4", source: "split_algo", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e5", source: "auto_split", target: "loop", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e6", source: "loop", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-0" },
-          { id: "e7", source: "fixed_start", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-1" },
-          { id: "e8", source: "fixed_end", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-2" },
-          { id: "e9", source: "concat_output_dir", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-3" },
+          { id: "e2", source: "read_dir", target: "iterate_split", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e3", source: "iterate_split", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e4", source: "split_output_dir", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-1" },
+          { id: "e5", source: "split_algo", target: "auto_split", sourceHandle: "out-0", targetHandle: "in-2" },
+          { id: "e6", source: "auto_split", target: "collect_split_files", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e7", source: "iterate_split", target: "collect_split_files", sourceHandle: "out-3", targetHandle: "in-1" },
+          { id: "e8", source: "collect_split_files", target: "loop", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e9", source: "loop", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-0" },
+          { id: "e10", source: "fixed_start", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-1" },
+          { id: "e11", source: "fixed_end", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-2" },
+          { id: "e12", source: "concat_output_dir", target: "compose_videos", sourceHandle: "out-0", targetHandle: "in-3" },
         ],
       },
     },

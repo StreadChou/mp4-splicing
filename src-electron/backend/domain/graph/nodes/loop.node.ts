@@ -48,6 +48,7 @@ export async function executeIterateNode(
       item: items,
       raw: items,
       index,
+      done: true,
       count,
       __loop: {
         mode: LoopMode.ITERATE_ITEMS,
@@ -76,6 +77,7 @@ export async function executeRepeatNode(
     output: {
       raw,
       index,
+      done: true,
       count: times,
       __loop: {
         mode: LoopMode.FIXED_TIMES,

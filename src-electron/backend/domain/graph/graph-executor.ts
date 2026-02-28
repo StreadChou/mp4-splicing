@@ -16,6 +16,20 @@ interface GraphExecutionState {
   pendingNodeId: string;
 }
 
+interface IncomingEdgeBinding {
+  sourceNode: WorkflowGraphNode | null;
+  sourceResult: Record<string, unknown>;
+  sourcePort: string;
+  targetPort: string;
+}
+
+interface LoopExpandPlan {
+  sourceNode: WorkflowGraphNode;
+  sourceResult: Record<string, unknown>;
+  count: number;
+  concurrency: number;
+}
+
 export interface GraphExecutorDeps {
   readTaskRuntime(taskId: string): Promise<TaskRuntimeSnapshot>;
   writeTaskRuntime(taskId: string, runtime: TaskRuntimeSnapshot): Promise<void>;
@@ -145,18 +159,38 @@ function appendLoopMeta(payload: Record<string, unknown>, sourceResult: Record<s
   };
 }
 
-function buildNodeInputPayload(
-  task: WorkflowTaskRecord,
+function readSourceValue(sourceResult: Record<string, unknown>, sourcePort: string): unknown {
+  let value = sourceResult[sourcePort];
+  if (value === undefined) {
+    value = sourceResult.result;
+  }
+  if (value === undefined) {
+    const values = Object.values(sourceResult);
+    if (values.length > 0) {
+      value = values[0];
+    }
+  }
+  return value;
+}
+
+function normalizePositiveInt(value: unknown, fallback: number): number {
+  const num = Math.round(Number(value));
+  if (!Number.isFinite(num) || num <= 0) {
+    return fallback;
+  }
+  return num;
+}
+
+function resolveIncomingEdgeBindings(
   targetNode: WorkflowGraphNode,
   workflow: WorkflowDefinition,
   nodeOutputs: Record<string, Record<string, unknown>>,
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
+): IncomingEdgeBinding[] {
   const nodeMap = new Map(workflow.graph.nodes.map((node) => [node.id, node] as const));
-
   const incomingEdges = workflow.graph.edges.filter((edge) => edge.target === targetNode.id);
-  for (const edge of incomingEdges) {
-    const sourceNode = nodeMap.get(edge.source);
+
+  return incomingEdges.map((edge) => {
+    const sourceNode = nodeMap.get(edge.source) || null;
     const sourceResult = nodeOutputs[edge.source] || {};
     const sourceOutputs = sourceNode ? WORKFLOW_NODE_PORT_TEMPLATES[sourceNode.type]?.outputs : undefined;
     const targetInputs = WORKFLOW_NODE_PORT_TEMPLATES[targetNode.type]?.inputs;
@@ -167,22 +201,113 @@ function buildNodeInputPayload(
       "in",
       sourcePort || targetInputs?.[0] || "input",
     );
+    return {
+      sourceNode,
+      sourceResult,
+      sourcePort,
+      targetPort,
+    };
+  });
+}
 
-    let value = sourceResult[sourcePort];
-    if (value === undefined) {
-      value = sourceResult.result;
+function resolveLoopExpandPlan(bindings: IncomingEdgeBinding[]): LoopExpandPlan | null {
+  const loopBindings = bindings.filter((binding) => {
+    const nodeType = binding.sourceNode?.type;
+    return nodeType === "iterate" || nodeType === "repeat";
+  });
+  if (loopBindings.length === 0) {
+    return null;
+  }
+
+  const firstLoopSource = loopBindings[0]?.sourceNode;
+  if (!firstLoopSource) {
+    return null;
+  }
+
+  const sameLoopSource = loopBindings.every((binding) => binding.sourceNode?.id === firstLoopSource.id);
+  if (!sameLoopSource) {
+    throw new Error("当前不支持同时依赖多个循环源节点");
+  }
+
+  const hasDataPort = loopBindings.some((binding) => binding.sourcePort !== "done");
+  if (!hasDataPort) {
+    return null;
+  }
+
+  const loopResult = loopBindings[0]?.sourceResult || {};
+  const loopMeta =
+    loopResult.__loop && typeof loopResult.__loop === "object" && !Array.isArray(loopResult.__loop)
+      ? (loopResult.__loop as Record<string, unknown>)
+      : {};
+
+  const count = normalizePositiveInt(loopMeta.count ?? loopMeta.times, 1);
+  const concurrency = normalizePositiveInt(loopMeta.concurrency, 1);
+  return {
+    sourceNode: firstLoopSource,
+    sourceResult: loopResult,
+    count,
+    concurrency,
+  };
+}
+
+function resolveLoopBindingValue(
+  plan: LoopExpandPlan,
+  sourcePort: string,
+  fallbackValue: unknown,
+  index: number,
+): unknown {
+  const { sourceNode, sourceResult, count } = plan;
+  if (sourceNode.type === "iterate") {
+    if (sourcePort === "item") {
+      return Array.isArray(sourceResult.item) ? sourceResult.item[index] : sourceResult.item;
     }
-    if (value === undefined) {
-      const values = Object.values(sourceResult);
-      if (values.length > 0) {
-        value = values[0];
-      }
+    if (sourcePort === "index") {
+      return index;
     }
+    if (sourcePort === "done") {
+      return index === count - 1;
+    }
+    if (sourcePort === "raw") {
+      return sourceResult.raw ?? sourceResult.result;
+    }
+  }
+
+  if (sourceNode.type === "repeat") {
+    if (sourcePort === "index") {
+      return index;
+    }
+    if (sourcePort === "done") {
+      return index === count - 1;
+    }
+    if (sourcePort === "raw") {
+      return sourceResult.raw ?? sourceResult.result;
+    }
+  }
+
+  if (Array.isArray(fallbackValue) && sourcePort !== "raw") {
+    return fallbackValue[index];
+  }
+  return fallbackValue;
+}
+
+function buildNodeInputPayloadFromBindings(
+  task: WorkflowTaskRecord,
+  bindings: IncomingEdgeBinding[],
+  expand?: { plan: LoopExpandPlan; index: number },
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+
+  for (const binding of bindings) {
+    const rawValue = readSourceValue(binding.sourceResult, binding.sourcePort);
+    const value = expand && binding.sourceNode?.id === expand.plan.sourceNode.id
+      ? resolveLoopBindingValue(expand.plan, binding.sourcePort, rawValue, expand.index)
+      : rawValue;
+
     if (value !== undefined) {
-      appendInputValue(payload, targetPort, value);
+      appendInputValue(payload, binding.targetPort, value);
     }
-    if (sourceNode && (sourceNode.type === "iterate" || sourceNode.type === "repeat")) {
-      appendLoopMeta(payload, sourceResult);
+    if (binding.sourceNode && (binding.sourceNode.type === "iterate" || binding.sourceNode.type === "repeat")) {
+      appendLoopMeta(payload, binding.sourceResult);
     }
   }
 
@@ -192,7 +317,40 @@ function buildNodeInputPayload(
     }
   }
 
+  if (expand) {
+    if (!("index" in payload)) {
+      payload.index = expand.index;
+    }
+    if (!("done" in payload)) {
+      payload.done = expand.index === expand.plan.count - 1;
+    }
+  }
+
   return payload;
+}
+
+function mergeIterationOutputs(iterationOutputs: Array<Record<string, unknown>>): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const output of iterationOutputs) {
+    for (const [key, value] of Object.entries(output)) {
+      if (!(key in merged)) {
+        merged[key] = value;
+        continue;
+      }
+
+      const existing = merged[key];
+      if (Array.isArray(existing) && Array.isArray(value)) {
+        merged[key] = [...existing, ...value];
+      } else if (Array.isArray(existing)) {
+        merged[key] = [...existing, value];
+      } else if (Array.isArray(value)) {
+        merged[key] = [existing, ...value];
+      } else {
+        merged[key] = [existing, value];
+      }
+    }
+  }
+  return merged;
 }
 
 function normalizeResumePayload(node: WorkflowGraphNode, resumePayload: Record<string, unknown>): Record<string, unknown> {
@@ -296,10 +454,40 @@ export async function executeWorkflowGraph(
     };
     await deps.appendTaskLog(task.id, `节点开始执行: ${getGraphNodeLabel(readyNode)} (${readyNode.type})`, "info", nodeLogMeta);
 
-    const payload = buildNodeInputPayload(task, readyNode, workflow, state.nodeOutputs);
+    const incomingBindings = resolveIncomingEdgeBindings(readyNode, workflow, state.nodeOutputs);
+    const loopExpandPlan = resolveLoopExpandPlan(incomingBindings);
     let result: Awaited<ReturnType<typeof executeGraphNode>>;
     try {
-      result = await executeGraphNode(task, sender, readyNode, payload, deps.nodeExecutionDeps);
+      if (!loopExpandPlan) {
+        const payload = buildNodeInputPayloadFromBindings(task, incomingBindings);
+        result = await executeGraphNode(task, sender, readyNode, payload, deps.nodeExecutionDeps);
+      } else {
+        const indexes = Array.from({ length: loopExpandPlan.count }, (_item, idx) => idx);
+        const iterationOutputs: Array<Record<string, unknown>> = new Array(loopExpandPlan.count);
+        await deps.appendTaskLog(
+          task.id,
+          `检测到循环源，节点将展开执行 ${String(loopExpandPlan.count)} 次（并发 ${String(loopExpandPlan.concurrency)}）`,
+          "info",
+          nodeLogMeta,
+        );
+
+        await deps.nodeExecutionDeps.runWithConcurrency(indexes, loopExpandPlan.concurrency, async (index) => {
+          const payload = buildNodeInputPayloadFromBindings(task, incomingBindings, {
+            plan: loopExpandPlan,
+            index,
+          });
+          const iterationResult = await executeGraphNode(task, sender, readyNode, payload, deps.nodeExecutionDeps);
+          if (iterationResult.kind === "wait") {
+            throw new Error("循环展开节点不支持等待人工输入");
+          }
+          iterationOutputs[index] = iterationResult.output;
+        });
+
+        result = {
+          kind: "output",
+          output: mergeIterationOutputs(iterationOutputs.filter((item): item is Record<string, unknown> => !!item)),
+        };
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await deps.appendTaskLog(task.id, `节点执行失败: ${message}`, "error", nodeLogMeta);

@@ -37,6 +37,13 @@ export const ITERATE_NODE: NodeDefinition = {
       required: true,
       description: "当前遍历索引。",
     },
+    {
+      name: "done",
+      direction: PortDirection.OUTPUT,
+      valueType: PortDataType.COMPLETION_SIGNAL,
+      required: true,
+      description: "遍历结束信号。",
+    },
   ],
   fields: [
     {

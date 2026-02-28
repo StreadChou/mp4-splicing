@@ -16,6 +16,8 @@ export enum NodeType {
   ITERATE = "iterate",
   /** 固定次数循环节点。 */
   REPEAT = "repeat",
+  /** 收集节点（汇总循环产物）。 */
+  COLLECT = "collect",
   /** 旧版批量下载类型（兼容历史数据）。 */
   BATCH_DOWNLOAD = "batch_download",
   /** SSIM 拆解算法节点。 */

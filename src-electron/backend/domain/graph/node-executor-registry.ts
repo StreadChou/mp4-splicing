@@ -12,6 +12,7 @@ import type {
 import { asBoolean, asNumber, asRecord, asString, getGraphNodeLabel, normalizeNodeOutput } from "./node-execution-helpers";
 import type { NodeExecutionDeps, NodeExecutionResult, NodeExecutor } from "./node-execution";
 import { executeComposeVideosNode, executeSelectVideoNode } from "./nodes/media.node";
+import { executeCollectNode } from "./nodes/collect.node";
 import { executeIterateNode, executeRepeatNode } from "./nodes/loop.node";
 import { executeDownloadNode } from "./nodes/network.node";
 import { executeSplitComposePerVideoNode } from "./nodes/split-compose-per-video.node";
@@ -196,6 +197,10 @@ const executors: Record<string, NodeExecutor> = {
 
   [NodeType.REPEAT]: async (task, _sender, _node, payload, config) => {
     return executeRepeatNode(task, payload, config);
+  },
+
+  [NodeType.COLLECT]: async (_task, _sender, _node, payload) => {
+    return executeCollectNode(payload);
   },
 
   [NodeType.BATCH_DOWNLOAD]: async (task, sender, node, payload, config, deps) => {
